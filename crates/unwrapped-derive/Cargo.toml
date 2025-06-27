@@ -1,0 +1,19 @@
+[package]
+name = "unwrapped-derive"
+version.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true }
+unwrapped-core = { workspace = true }
+
+[lints]
+workspace = true

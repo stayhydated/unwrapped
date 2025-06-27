@@ -1,0 +1,16 @@
+[package]
+name = "unwrapped"
+version.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[dependencies]
+unwrapped-derive = { optional = true, workspace = true }
+
+[features]
+default = [ "derive" ]
+derive = [ "dep:unwrapped-derive" ]

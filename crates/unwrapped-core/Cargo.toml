@@ -1,0 +1,19 @@
+[package]
+name = "unwrapped-core"
+version.workspace = true
+categories.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+readme.workspace = true
+repository.workspace = true
+
+[dependencies]
+bon = { workspace = true }
+darling = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true }
+
+[lints]
+workspace = true
