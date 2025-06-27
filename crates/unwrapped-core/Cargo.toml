@@ -1,5 +1,8 @@
 [package]
 name = "unwrapped-core"
+description = """
+    Core library for unwrapped
+"""
 version.workspace = true
 categories.workspace = true
 edition.workspace = true

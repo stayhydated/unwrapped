@@ -1,5 +1,8 @@
 [package]
 name = "unwrapped-derive"
+description = """
+    Derive library for unwrapped
+"""
 version.workspace = true
 categories.workspace = true
 edition.workspace = true
