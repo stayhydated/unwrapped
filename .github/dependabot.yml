@@ -36,7 +36,7 @@ updates:
       - "dependencies"
       - "rust"
     ignore:
-      - dependency-name: "actions/checkout"
+      - dependency-name: "*"
         update-types:
           ["version-update:semver-minor", "version-update:semver-patch"]
     assignees:
