@@ -13,7 +13,7 @@ version = "0.1.1"
 
 [workspace.dependencies]
 bon = "3.6.4"
-darling = "0.20.10"
+darling = "0.21.3"
 proc-macro2 = "1.0.93"
 quote = "1.0.38"
 syn = "2.0.104"
