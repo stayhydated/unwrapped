@@ -3,10 +3,10 @@ Creates a new struct, changing each field `Option<T> -> T`
 ```rs
 #[derive(Unwrapped)]
 pub struct Ab {
-  b : Option<Ab>,
-  c : u8,
+  a : Option<Ab>,
+  b : u8,
   #[unwrapped(skip)]
-  d : Option<String>,
+  c : Option<String>,
 }
 ```
 
@@ -16,7 +16,7 @@ pub struct Ab {
 pub struct AbUw {
   a : Ab,
   b : u8,
-  d : Option<String>,
+  c : Option<String>,
 }
 ```
 
