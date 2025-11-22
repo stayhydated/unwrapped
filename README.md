@@ -1,3 +1,7 @@
+[![Build Status](https://github.com/stayhydated/unwrapped/actions/workflows/ci.yml/badge.svg)](https://github.com/stayhydated/unwrapped/actions/workflows/ci.yml)
+[![Docs](https://docs.rs/unwrapped/badge.svg)](https://docs.rs/unwrapped/)
+[![Crates.io](https://img.shields.io/crates/v/unwrapped.svg)](https://crates.io/crates/unwrapped)
+
 Creates a new struct, changing each field `Option<T> -> T`
 
 ```rs
