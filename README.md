@@ -163,14 +163,3 @@ pub fn my_macro(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 ```
-
-## Examples
-
-see the tests
-
-- https://github.com/stayhydated/unwrapped-private/blob/master/crates/unwrapped/tests/test.rs
-- https://github.com/stayhydated/unwrapped-private/blob/master/crates/unwrapped-core/tests/macro_usage.rs
-
-in a crate
-
-- https://github.com/stayhydated/gpui-form/blob/master/crates/gpui-form-derive/src/derives/gpui_form.rs#L309
