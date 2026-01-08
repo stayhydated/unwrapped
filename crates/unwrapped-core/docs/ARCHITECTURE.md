@@ -11,15 +11,18 @@ The crate exposes a single entry point function `unwrapped()` that takes a parse
 ### Key Components
 
 - **`Opts`** - Struct-level configuration parsed from `#[unwrapped(...)]` attributes
+
   - `name` - Custom name for the generated struct
   - `prefix` - Prefix to add to the struct name
   - `suffix` - Suffix to add to the struct name
   - Uses `bon` for builder pattern: `Opts::builder().suffix(ident).build()`
 
 - **`FieldOpts`** - Field-level configuration parsed from `#[unwrapped(...)]` attributes
+
   - `skip` - When true, the field remains `Option<T>` in the unwrapped struct
 
 - **`ProcUsageOpts`** - Runtime options for proc-macro authors
+
   - `fields_to_unwrap` - Map of field names to unwrap behavior overrides
   - `lib_holder_name` - Custom path for the `unwrapped` crate import
 
@@ -30,10 +33,10 @@ The crate exposes a single entry point function `unwrapped()` that takes a parse
 Given an input struct, the function generates:
 
 1. **Unwrapped struct** with `#[derive(Clone, Debug, Default)]`
-2. **`From<Original>` for Unwrapped** using `unwrap_or_default()`
-3. **`From<Unwrapped>` for Original** wrapping in `Some()`
-4. **`Unwrapped` trait impl** associating types
-5. **`try_from()` method** returning `UnwrappedError` on `None`
+1. **`From<Original>` for Unwrapped** using `unwrap_or_default()`
+1. **`From<Unwrapped>` for Original** wrapping in `Some()`
+1. **`Unwrapped` trait impl** associating types
+1. **`try_from()` method** returning `UnwrappedError` on `None`
 
 ## Data Flow
 
@@ -63,8 +66,8 @@ graph TD
 The `Opts::unwrapped_ident()` method determines the generated struct name:
 
 1. Apply prefix + (name or original) + suffix
-2. If result equals original name, append "Uw" suffix
-3. Default suffix is "Uw" when no naming options provided
+1. If result equals original name, append "Uw" suffix
+1. Default suffix is "Uw" when no naming options provided
 
 ## Where Clause Handling
 
