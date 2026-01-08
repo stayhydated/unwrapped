@@ -3,12 +3,11 @@ name = "unwrapped-derive"
 description = """
     Derive library for unwrapped
 """
+readme = "README.md"
 version.workspace = true
-categories.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-readme.workspace = true
 repository.workspace = true
 
 [lib]
