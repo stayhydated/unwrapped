@@ -188,10 +188,10 @@ pub fn wrapped(
         }
 
         // From dynamic field_attr_fn
-        if let Some(attr_fn) = proc_usage_opts.field_attr_fn {
-            if let Some(attr) = attr_fn(f) {
-                attrs.push(attr);
-            }
+        if let Some(attr_fn) = proc_usage_opts.field_attr_fn
+            && let Some(attr) = attr_fn(f)
+        {
+            attrs.push(attr);
         }
 
         attrs
@@ -313,9 +313,16 @@ pub fn wrapped(
     let struct_attrs = &opts.struct_attrs;
     let struct_derives = &opts.struct_derives;
 
+    // Only add default derives if no custom derives are specified
+    let derive_output = if struct_derives.is_empty() {
+        quote! { #[derive()] }
+    } else {
+        quote! { #[derive(#(#struct_derives),*)] }
+    };
+
     quote! {
         #(#struct_attrs)*
-        #[derive(Clone, Debug, Default #(, #struct_derives)*)]
+        #derive_output
         pub struct #wrapped_ident #ty_generics #where_clause {
             #(#fields),*
         }

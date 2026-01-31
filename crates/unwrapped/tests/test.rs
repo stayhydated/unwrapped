@@ -1,4 +1,4 @@
-use unwrapped::{Unwrapped, UnwrappedError, Wrapped};
+use unwrapped::{Unwrapped, Wrapped};
 
 #[test]
 fn test_unwrapped_from_defaults() {
@@ -73,12 +73,10 @@ fn test_unwrapped_simple_struct() {
 
     let result = SimpleUw::try_from(original_fail);
     assert!(result.is_err());
-    assert_eq!(
-        result.unwrap_err(),
-        UnwrappedError {
-            field_name: "field1"
-        }
-    );
+    match result {
+        Err(e) => assert_eq!(e.field_name, "field1"),
+        Ok(_) => panic!("Expected error"),
+    }
 }
 
 #[test]
@@ -229,7 +227,10 @@ fn test_skip_field() {
     };
     let unwrapped5_res = SkippedUw::try_from(original5);
     assert!(unwrapped5_res.is_err());
-    assert_eq!(unwrapped5_res.unwrap_err().field_name, "field_a");
+    match unwrapped5_res {
+        Err(e) => assert_eq!(e.field_name, "field_a"),
+        Ok(_) => panic!("Expected error"),
+    }
 }
 
 // ==================== Wrapped Tests ====================

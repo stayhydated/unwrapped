@@ -30,8 +30,9 @@ fn test_macro_usage() {
 
     let model_struct = unwrapped(&parsed, Some(model_options), macro_options);
 
+    // Core library doesn't derive anything by default - consumer must specify derives
     let expected = quote! {
-        #[derive(Clone, Debug, Default)]
+        #[derive()]
         pub struct ThingFormValueHolder {
             pub id: i32,
             pub name: Option<String>
@@ -64,8 +65,9 @@ fn test_wrapped_macro_usage() {
 
     let model_struct = wrapped(&parsed, Some(model_options), macro_options);
 
+    // Core library doesn't derive anything by default - consumer must specify derives
     let expected = quote! {
-        #[derive(Clone, Debug, Default)]
+        #[derive()]
         pub struct ThingFormValueHolder {
             pub id: Option<i32>,
             pub name: String
