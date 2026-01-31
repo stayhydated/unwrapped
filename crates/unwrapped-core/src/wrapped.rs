@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use darling::{FromDeriveInput, FromField};
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::DeriveInput;
 
-use crate::utils::{get_struct_data, is_option_type};
+use crate::utils::{
+    CommonOpts, ProcUsageOpts, build_derive_output, collect_field_attrs, get_struct_data,
+    is_option_type,
+};
 
 #[derive(Clone, Debug, Default, FromField)]
 #[darling(default, attributes(wrapped))]
@@ -38,24 +41,7 @@ pub struct WrappedOpts {
 
 impl WrappedOpts {
     pub fn wrapped_ident(&self, original_ident: &syn::Ident) -> syn::Ident {
-        let base = self.name.as_ref().unwrap_or(original_ident);
-        let prefix = &self
-            .prefix
-            .as_ref()
-            .map(|ident| ident.to_string())
-            .unwrap_or_default();
-        let suffix = &self
-            .suffix
-            .as_ref()
-            .map(|ident| ident.to_string())
-            .unwrap_or_default();
-        let new = format_ident!("{}{}{}", prefix, base, suffix);
-
-        if &new == original_ident {
-            format_ident!("{}W", original_ident)
-        } else {
-            new
-        }
+        self.to_common().generate_ident(original_ident, "W")
     }
 
     /// Add a derive to the generated struct
@@ -88,6 +74,17 @@ impl WrappedOpts {
             .or_default()
             .push(tokens.into());
         self
+    }
+
+    fn to_common(&self) -> CommonOpts {
+        CommonOpts {
+            name: self.name.clone(),
+            prefix: self.prefix.clone(),
+            suffix: self.suffix.clone(),
+            struct_derives: self.struct_derives.clone(),
+            struct_attrs: self.struct_attrs.clone(),
+            field_attrs: self.field_attrs.clone(),
+        }
     }
 }
 
@@ -155,6 +152,25 @@ impl WrappedProcUsageOpts {
         self.field_attr_fn = Some(f);
         self
     }
+
+    fn to_common(&self) -> ProcUsageOpts {
+        let mut field_opts = HashMap::new();
+        for (name, opts) in &self.field_opts {
+            field_opts.insert(
+                name.clone(),
+                crate::utils::FieldProcOpts {
+                    transform: opts.wrap,
+                    attrs: opts.attrs.clone(),
+                },
+            );
+        }
+        ProcUsageOpts {
+            fields_to_transform: self.fields_to_wrap.clone(),
+            lib_holder_name: self.lib_holder_name.clone(),
+            field_opts,
+            field_attr_fn: self.field_attr_fn,
+        }
+    }
 }
 
 pub fn wrapped(
@@ -165,37 +181,14 @@ pub fn wrapped(
     let opts =
         options.unwrap_or_else(|| WrappedOpts::from_derive_input(input).expect("Wrong options"));
     let lib_path = proc_usage_opts.lib_path();
+    let common_opts = opts.to_common();
+    let common_proc_opts = proc_usage_opts.to_common();
 
     let original_ident = &input.ident;
     let wrapped_ident = &opts.wrapped_ident(original_ident);
 
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let s = get_struct_data(input);
-
-    // Helper function to collect field attributes from all sources
-    let get_field_attrs = |f: &syn::Field| -> Vec<proc_macro2::TokenStream> {
-        let name_str = f.ident.as_ref().unwrap().to_string();
-        let mut attrs = Vec::new();
-
-        // From WrappedOpts field_attrs
-        if let Some(opts_attrs) = opts.field_attrs.get(&name_str) {
-            attrs.extend(opts_attrs.clone());
-        }
-
-        // From WrappedProcUsageOpts field_opts
-        if let Some(field_opts) = proc_usage_opts.field_opts.get(&name_str) {
-            attrs.extend(field_opts.attrs.clone());
-        }
-
-        // From dynamic field_attr_fn
-        if let Some(attr_fn) = proc_usage_opts.field_attr_fn
-            && let Some(attr) = attr_fn(f)
-        {
-            attrs.push(attr);
-        }
-
-        attrs
-    };
 
     // Generate wrapped struct fields - all non-Option<T> fields become Option<T>
     let fields = s.fields.iter().map(|f| {
@@ -212,7 +205,7 @@ pub fn wrapped(
                 .unwrap_or(&true);
 
         // Collect field attributes
-        let field_attrs = get_field_attrs(f);
+        let field_attrs = collect_field_attrs(f, &common_opts, &common_proc_opts);
 
         if is_already_option || should_skip {
             quote! { #(#field_attrs)* pub #name: #ty }
@@ -311,14 +304,7 @@ pub fn wrapped(
 
     // Build struct-level attributes and derives
     let struct_attrs = &opts.struct_attrs;
-    let struct_derives = &opts.struct_derives;
-
-    // Only add default derives if no custom derives are specified
-    let derive_output = if struct_derives.is_empty() {
-        quote! { #[derive()] }
-    } else {
-        quote! { #[derive(#(#struct_derives),*)] }
-    };
+    let derive_output = build_derive_output(&opts.struct_derives);
 
     quote! {
         #(#struct_attrs)*
