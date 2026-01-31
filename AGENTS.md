@@ -1,6 +1,11 @@
 # Project Overview
 
-`unwrapped` is a Rust procedural macro library that generates "unwrapped" struct variants by converting `Option<T>` fields to `T` fields. This is useful for form handling, API design patterns, and data transformation pipelines where you need multiple struct variants with different optionality semantics.
+`unwrapped` is a Rust procedural macro library that generates struct variants with different optionality semantics:
+
+- **`Unwrapped`** - Converts `Option<T>` fields to `T` fields
+- **`Wrapped`** - Converts `T` fields to `Option<T>` fields
+
+This is useful for form handling, API design patterns, and data transformation pipelines where you need multiple struct variants with different optionality semantics.
 
 **Key Focus Areas:**
 
@@ -20,7 +25,7 @@
 
 ### Core Library
 
-- **unwrapped** - Public-facing crate providing `#[derive(Unwrapped)]`, the `Unwrapped` trait, and `UnwrappedError` type
+- **unwrapped** - Public-facing crate providing `#[derive(Unwrapped)]` and `#[derive(Wrapped)]`, the `Unwrapped` and `Wrapped` traits, and `UnwrappedError` type
 
 ### Macro Implementation
 

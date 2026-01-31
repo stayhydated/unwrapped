@@ -2,6 +2,8 @@
 [![Docs](https://docs.rs/unwrapped/badge.svg)](https://docs.rs/unwrapped/)
 [![Crates.io](https://img.shields.io/crates/v/unwrapped.svg)](https://crates.io/crates/unwrapped)
 
+# Unwrapped
+
 Creates a new struct, changing each field `Option<T> -> T`
 
 ```rs
@@ -120,6 +122,118 @@ struct User3;
 type S3 = BadUser3Something;
 ```
 
+# Wrapped
+
+Creates a new struct, changing each field `T -> Option<T>`. This is the inverse of `Unwrapped`.
+
+```rs
+#[derive(Wrapped)]
+pub struct Config {
+  timeout: u64,
+  retries: i32,
+  #[wrapped(skip)]
+  name: String,
+}
+```
+
+->
+
+```rs
+pub struct ConfigW {
+  timeout: Option<u64>,
+  retries: Option<i32>,
+  name: String,
+}
+```
+
+## Conversions
+
+### Defaulting
+
+Uses `unwrap_or_default()` on `Option` fields when converting back to the original struct.
+
+```rust
+use unwrapped::Wrapped;
+
+#[derive(Debug, PartialEq, Wrapped)]
+struct Config {
+    timeout: u64,
+    retries: i32,
+}
+
+let wrapped = ConfigW {
+    timeout: Some(30),
+    retries: None,
+};
+
+let config: Config = wrapped.into();
+
+assert_eq!(config.timeout, 30);
+assert_eq!(config.retries, 0);  // Default i32
+```
+
+### Fallible
+
+```rust
+use unwrapped::{Wrapped, UnwrappedError};
+
+#[derive(Debug, PartialEq, Wrapped)]
+struct Config {
+    timeout: u64,
+    retries: i32,
+}
+
+let wrapped_missing = ConfigW {
+    timeout: Some(30),
+    retries: None,
+};
+
+let result = ConfigW::try_from(wrapped_missing);
+assert!(result.is_err());
+assert_eq!(
+    result.unwrap_err(),
+    UnwrappedError {
+        field_name: "retries"
+    }
+);
+```
+
+## Customizing the Generated Struct Name
+
+You can specify a custom name for the generated struct using the `wrapped` attribute.
+
+```rust
+use unwrapped::Wrapped;
+
+#[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(prefix = "A", name = UserWrapped, suffix = "c")]
+struct User0;
+
+#[allow(dead_code)]
+type S0 = AUserWrappedc;
+
+#[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(prefix = "Bad")]
+struct User1;
+
+#[allow(dead_code)]
+type S1 = BadUser1;
+
+#[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(suffix = "Something")]
+struct User2;
+
+#[allow(dead_code)]
+type S2 = User2Something;
+
+#[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(prefix = "Bad", suffix = "Something")]
+struct User3;
+
+#[allow(dead_code)]
+type S3 = BadUser3Something;
+```
+
 ## For Proc-Macro Authors
 
 ```toml
@@ -159,6 +273,35 @@ pub fn my_macro(input: TokenStream) -> TokenStream {
           #(#field_base_declarations_tokens)*
         }
     };
+
+    expanded.into()
+}
+```
+
+Or for the Wrapped variant:
+
+```rust
+use std::collections::HashMap;
+use syn::DeriveInput;
+
+#[proc_macro_derive(MyWrappedMacro)]
+pub fn my_wrapped_macro(input: TokenStream) -> TokenStream {
+    let derive_input: DeriveInput = syn::parse(input).unwrap();
+
+    let mut fields_to_wrap: HashMap<String, bool> = HashMap::new();
+    fields_to_wrap.insert("id".to_owned(), true);
+    fields_to_wrap.insert("name".to_owned(), false);
+
+    let model_options = unwrapped_core::WrappedOpts::builder()
+        .suffix(format_ident!("FormValueHolder"))
+        .build();
+
+    let macro_options = unwrapped_core::WrappedProcUsageOpts::new(fields_to_wrap, None);
+
+    // Generate the wrapped data model struct with a custom suffix
+    let model_struct = unwrapped_core::wrapped(&derive_input, Some(model_options), macro_options);
+
+    // ... your macro's logic ...
 
     expanded.into()
 }

@@ -1,4 +1,4 @@
-use unwrapped::{Unwrapped, UnwrappedError};
+use unwrapped::{Unwrapped, UnwrappedError, Wrapped};
 
 #[test]
 fn test_unwrapped_from_defaults() {
@@ -230,4 +230,182 @@ fn test_skip_field() {
     let unwrapped5_res = SkippedUw::try_from(original5);
     assert!(unwrapped5_res.is_err());
     assert_eq!(unwrapped5_res.unwrap_err().field_name, "field_a");
+}
+
+// ==================== Wrapped Tests ====================
+
+#[test]
+fn test_wrapped_simple_struct() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    struct Simple {
+        field1: i32,
+        field2: String,
+        field3: Option<u64>,
+    }
+
+    let original = Simple {
+        field1: 10,
+        field2: "hello".to_string(),
+        field3: Some(100),
+    };
+
+    // Convert to wrapped - non-Option fields become Option
+    let wrapped: SimpleW = original.into();
+    assert_eq!(wrapped.field1, Some(10));
+    assert_eq!(wrapped.field2, Some("hello".to_string()));
+    assert_eq!(wrapped.field3, Some(100)); // Already Option, stays as-is
+
+    // Convert back - unwrap with defaults
+    let converted_back: Simple = wrapped.into();
+    assert_eq!(converted_back.field1, 10);
+    assert_eq!(converted_back.field2, "hello".to_string());
+    assert_eq!(converted_back.field3, Some(100));
+}
+
+#[test]
+fn test_wrapped_with_none_values() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    struct WithOptionals {
+        required: i32,
+        optional: String,
+    }
+
+    let wrapped = WithOptionalsW {
+        required: None,
+        optional: Some("value".to_string()),
+    };
+
+    // Conversion from wrapped with None uses default
+    let converted: WithOptionals = wrapped.into();
+    assert_eq!(converted.required, 0); // Default i32
+    assert_eq!(converted.optional, "value".to_string());
+}
+
+#[test]
+fn test_wrapped_try_from() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    struct Config {
+        timeout: u64,
+        retries: i32,
+        name: String,
+    }
+
+    let wrapped_all_some = ConfigW {
+        timeout: Some(30),
+        retries: Some(3),
+        name: Some("test".to_string()),
+    };
+
+    // try_from should succeed when all fields are Some
+    let result = ConfigW::try_from(wrapped_all_some);
+    assert!(result.is_ok());
+    let config = result.unwrap();
+    assert_eq!(config.timeout, 30);
+    assert_eq!(config.retries, 3);
+    assert_eq!(config.name, "test".to_string());
+
+    let wrapped_missing = ConfigW {
+        timeout: Some(30),
+        retries: None,
+        name: Some("test".to_string()),
+    };
+
+    // try_from should fail when any field is None
+    let result = ConfigW::try_from(wrapped_missing);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().field_name, "retries");
+}
+
+#[test]
+fn test_wrapped_with_generics() {
+    #[derive(Clone, Debug, PartialEq, Wrapped)]
+    struct Generic<T: Clone + PartialEq + std::fmt::Debug + Default> {
+        value: T,
+        id: i32,
+    }
+
+    let original = Generic {
+        value: true,
+        id: 123,
+    };
+
+    let wrapped: GenericW<bool> = original.into();
+    assert_eq!(wrapped.value, Some(true));
+    assert_eq!(wrapped.id, Some(123));
+
+    let converted_back: Generic<bool> = wrapped.into();
+    assert_eq!(converted_back.value, true);
+    assert_eq!(converted_back.id, 123);
+}
+
+#[test]
+fn test_wrapped_trait() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    struct MyStruct {
+        data: String,
+    }
+
+    fn check_wrapped<T: Wrapped<Wrapped = W>, W>(_: T) {}
+    check_wrapped(MyStruct {
+        data: "test".to_string(),
+    });
+}
+
+#[test]
+fn test_wrapped_skip_field() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(name = SkippedW)]
+    struct Skipped {
+        field_a: u32,
+        #[wrapped(skip)]
+        field_b: Option<String>,
+        field_c: bool,
+    }
+
+    let original = Skipped {
+        field_a: 10,
+        field_b: None,
+        field_c: true,
+    };
+
+    let wrapped = SkippedW::from(original);
+    assert_eq!(wrapped.field_a, Some(10));
+    assert_eq!(wrapped.field_b, None); // Skipped, stays as-is
+    assert_eq!(wrapped.field_c, Some(true));
+
+    let converted_back: Skipped = wrapped.into();
+    assert_eq!(converted_back.field_a, 10);
+    assert_eq!(converted_back.field_b, None);
+    assert_eq!(converted_back.field_c, true);
+}
+
+#[test]
+fn test_wrapped_with_custom_name() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(prefix = "A", name = UserWrapped, suffix = c)]
+    struct User0;
+
+    #[allow(dead_code)]
+    type Works0 = AUserWrappedc;
+
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(prefix = Bad)]
+    struct User1;
+
+    #[allow(dead_code)]
+    type Works1 = BadUser1;
+
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(suffix = "Something")]
+    struct User2;
+
+    #[allow(dead_code)]
+    type Works2 = User2Something;
+
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(prefix = Bad, suffix = Something)]
+    struct User3;
+
+    #[allow(dead_code)]
+    type Works3 = BadUser3Something;
 }

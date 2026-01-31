@@ -29,5 +29,14 @@ pub trait Unwrapped {
     type Unwrapped;
 }
 
+/// Trait that associates a struct with its wrapped variant.
+///
+/// Automatically implemented by `#[derive(Wrapped)]`. The associated type
+/// `Wrapped` is the generated struct where all `T` fields become `Option<T>`.
+pub trait Wrapped {
+    /// The wrapped variant of this type.
+    type Wrapped;
+}
+
 #[cfg(feature = "derive")]
 pub use unwrapped_derive::*;
