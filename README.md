@@ -61,7 +61,7 @@ assert_eq!(unwrapped.val4, Vec::<u8>::new());
 ### Fallible
 
 ```rust
-use unwrapped::Unwrapped;
+use unwrapped::{Unwrapped, UnwrappedError};
 
 #[derive(Debug, PartialEq, Unwrapped)]
 struct Simple {
@@ -78,12 +78,10 @@ let original_fail = Simple {
 
 let result = SimpleUw::try_from(original_fail);
 assert!(result.is_err());
-assert_eq!(
-    result.unwrap_err(),
-    UnwrappedError {
-        field_name: "field1"
-    }
-);
+match result {
+    Err(e) => assert_eq!(e.field_name, "field1"),
+    Ok(_) => panic!("Expected error"),
+}
 ```
 
 ## Customizing the Generated Struct Name
@@ -98,7 +96,7 @@ use unwrapped::Unwrapped;
 struct User0;
 
 #[allow(dead_code)]
-type S0 = UserUnwrapped;
+type S0 = AUserUnwrappedc;
 
 #[derive(Debug, PartialEq, Unwrapped)]
 #[unwrapped(prefix = "Bad")]
@@ -188,14 +186,12 @@ let wrapped_missing = ConfigW {
     retries: None,
 };
 
-let result = ConfigW::try_from(wrapped_missing);
+let result: Result<Config, UnwrappedError> = ConfigW::try_from(wrapped_missing);
 assert!(result.is_err());
-assert_eq!(
-    result.unwrap_err(),
-    UnwrappedError {
-        field_name: "retries"
-    }
-);
+match result {
+    Err(e) => assert_eq!(e.field_name, "retries"),
+    Ok(_) => panic!("Expected error"),
+}
 ```
 
 ## Customizing the Generated Struct Name
@@ -238,40 +234,39 @@ type S3 = BadUser3Something;
 
 ```toml
 [dependencies]
-unwrapped-core = { version = "0.1.0" }
+unwrapped-core = { version = "*" }
 ```
 
 You can then use it in your own proc-macro:
 
-```rust
+```rs
+use proc_macro::TokenStream;
+use quote::{format_ident, quote};
 use syn::DeriveInput;
+use std::collections::HashMap;
+use unwrapped_core::{Opts, UnwrappedProcUsageOpts, unwrapped};
 
-#[proc_macro_derive(MyMacro)]
-pub fn my_macro(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(MyUnwrappedMacro)]
+pub fn my_unwrapped_macro(input: TokenStream) -> TokenStream {
     let derive_input: DeriveInput = syn::parse(input).unwrap();
 
-    let model_options = unwrapped_core::Opts::builder()
+    let model_options = Opts::builder()
         .suffix(format_ident!("FormValueHolder"))
         .build();
 
+    let mut fields_to_unwrap: HashMap<String, bool> = HashMap::new();
+    fields_to_unwrap.insert("id".to_owned(), true);
+    fields_to_unwrap.insert("name".to_owned(), false);
+
+    let macro_options = UnwrappedProcUsageOpts::new(fields_to_unwrap, None);
+
     // Generate the unwrapped data model struct with a custom suffix
-    let model_struct = unwrapped_core::unwrapped(&derive_input, Some(model_options));
+    let model_struct = unwrapped(&derive_input, Some(model_options), macro_options);
 
     // ... your macro's logic ...
 
     let expanded = quote! {
         #model_struct
-        pub struct #components_holder_name {
-            #(#field_structure_tokens)*
-        }
-
-        #shape_impl
-
-        pub struct #components_base_declarations_name;
-
-        impl #components_base_declarations_name {
-          #(#field_base_declarations_tokens)*
-        }
     };
 
     expanded.into()
@@ -280,9 +275,12 @@ pub fn my_macro(input: TokenStream) -> TokenStream {
 
 Or for the Wrapped variant:
 
-```rust
-use std::collections::HashMap;
+```rs
+use proc_macro::TokenStream;
+use quote::{format_ident, quote};
 use syn::DeriveInput;
+use std::collections::HashMap;
+use unwrapped_core::{WrappedOpts, WrappedProcUsageOpts, wrapped};
 
 #[proc_macro_derive(MyWrappedMacro)]
 pub fn my_wrapped_macro(input: TokenStream) -> TokenStream {
@@ -292,16 +290,20 @@ pub fn my_wrapped_macro(input: TokenStream) -> TokenStream {
     fields_to_wrap.insert("id".to_owned(), true);
     fields_to_wrap.insert("name".to_owned(), false);
 
-    let model_options = unwrapped_core::WrappedOpts::builder()
+    let model_options = WrappedOpts::builder()
         .suffix(format_ident!("FormValueHolder"))
         .build();
 
-    let macro_options = unwrapped_core::WrappedProcUsageOpts::new(fields_to_wrap, None);
+    let macro_options = WrappedProcUsageOpts::new(fields_to_wrap, None);
 
     // Generate the wrapped data model struct with a custom suffix
-    let model_struct = unwrapped_core::wrapped(&derive_input, Some(model_options), macro_options);
+    let model_struct = wrapped(&derive_input, Some(model_options), macro_options);
 
     // ... your macro's logic ...
+
+    let expanded = quote! {
+        #model_struct
+    };
 
     expanded.into()
 }

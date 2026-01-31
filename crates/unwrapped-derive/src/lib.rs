@@ -1,5 +1,4 @@
-extern crate proc_macro;
-
+#[doc = include_str!("../README.md")]
 use proc_macro::TokenStream;
 use syn::{DeriveInput, parse_macro_input};
 use unwrapped_core::{UnwrappedProcUsageOpts, WrappedProcUsageOpts, unwrapped, wrapped};

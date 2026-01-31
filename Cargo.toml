@@ -9,7 +9,7 @@ publish = true
 readme = "README.md"
 repository = "https://github.com/stayhydated/unwrapped"
 rust-version = "1.88"
-version = "0.1.2"
+version = "0.2.0"
 
 [workspace.dependencies]
 bon = "3.8.1"
@@ -17,8 +17,8 @@ darling = "0.23.0"
 proc-macro2 = "1.0.105"
 quote = "1.0.43"
 syn = "2.0.114"
-unwrapped-core = { path = "crates/unwrapped-core", version = "0.1.2" }
-unwrapped-derive = { path = "crates/unwrapped-derive", version = "0.1.2" }
+unwrapped-core = { path = "crates/unwrapped-core", version = "0.2.0" }
+unwrapped-derive = { path = "crates/unwrapped-derive", version = "0.2.0" }
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "deny" }

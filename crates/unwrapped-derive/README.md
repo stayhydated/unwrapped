@@ -1,5 +1,5 @@
 # unwrapped-derive
 
-Procedural macro implementation for `#[derive(Unwrapped)]`.
+Procedural macro implementation for `#[derive(Unwrapped)]` and `#[derive(Wrapped)]`.
 
 This crate is an implementation detail of the `unwrapped` crate. Use `unwrapped` directly instead of depending on this crate.
