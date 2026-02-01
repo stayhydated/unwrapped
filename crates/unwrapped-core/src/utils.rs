@@ -110,6 +110,7 @@ impl Default for CommonOpts {
 pub struct FieldProcOpts {
     pub transform: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
+    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl FieldProcOpts {
@@ -117,11 +118,18 @@ impl FieldProcOpts {
         Self {
             transform,
             attrs: Vec::new(),
+            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
+        self
+    }
+
+    /// Set custom default expression
+    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
+        self.default_expr = Some(tokens.into());
         self
     }
 }

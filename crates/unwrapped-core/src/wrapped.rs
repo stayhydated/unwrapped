@@ -14,6 +14,7 @@ use crate::utils::{
 #[darling(default, attributes(wrapped))]
 struct WrappedFieldOpts {
     skip: bool,
+    default: Option<syn::Expr>, // Parse custom default expression
 }
 
 #[derive(Builder, Clone, Debug, FromDeriveInput)]
@@ -93,6 +94,7 @@ impl WrappedOpts {
 pub struct FieldProcOpts {
     pub wrap: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
+    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl FieldProcOpts {
@@ -100,11 +102,18 @@ impl FieldProcOpts {
         Self {
             wrap,
             attrs: Vec::new(),
+            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
+        self
+    }
+
+    /// Set custom default expression
+    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
+        self.default_expr = Some(tokens.into());
         self
     }
 }
@@ -161,6 +170,7 @@ impl WrappedProcUsageOpts {
                 crate::utils::FieldProcOpts {
                     transform: opts.wrap,
                     attrs: opts.attrs.clone(),
+                    default_expr: opts.default_expr.clone(),
                 },
             );
         }
@@ -231,7 +241,20 @@ pub fn wrapped(
         if is_already_option || should_skip {
             quote! { #name: from.#name }
         } else {
-            quote! { #name: from.#name.unwrap_or_default() }
+            // Priority-based default resolution:
+            // 1. Check programmatic defaults (highest priority)
+            // 2. Check attribute-based defaults
+            // 3. Fall back to unwrap_or_default()
+            let default_expr = proc_usage_opts
+                .field_opts
+                .get(&name_str)
+                .and_then(|o| o.default_expr.clone())
+                .or_else(|| field_opts.default.as_ref().map(|e| quote! { #e }));
+
+            match default_expr {
+                Some(expr) => quote! { #name: from.#name.unwrap_or(#expr) },
+                None => quote! { #name: from.#name.unwrap_or_default() },
+            }
         }
     });
 
@@ -251,6 +274,15 @@ pub fn wrapped(
 
         if is_already_option || should_skip {
             quote! { #name: from.#name }
+        } else if let Some(default_expr) = &field_opts.default {
+            // If value equals default, store as None
+            quote! {
+                #name: if from.#name == (#default_expr) {
+                    None
+                } else {
+                    Some(from.#name)
+                }
+            }
         } else {
             quote! { #name: Some(from.#name) }
         }

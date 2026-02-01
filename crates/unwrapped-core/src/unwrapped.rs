@@ -14,6 +14,7 @@ use crate::utils::{
 #[darling(default, attributes(unwrapped))]
 struct FieldOpts {
     skip: bool,
+    default: Option<syn::Expr>, // Parse custom default expression
 }
 
 #[derive(Builder, Clone, Debug, FromDeriveInput)]
@@ -93,6 +94,7 @@ impl Opts {
 pub struct UnwrappedFieldProcOpts {
     pub unwrap: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
+    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl UnwrappedFieldProcOpts {
@@ -100,11 +102,18 @@ impl UnwrappedFieldProcOpts {
         Self {
             unwrap,
             attrs: Vec::new(),
+            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
+        self
+    }
+
+    /// Set custom default expression
+    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
+        self.default_expr = Some(tokens.into());
         self
     }
 }
@@ -169,6 +178,7 @@ impl UnwrappedProcUsageOpts {
                 FieldProcOpts {
                     transform: opts.unwrap,
                     attrs: opts.attrs.clone(),
+                    default_expr: opts.default_expr.clone(),
                 },
             );
         }
@@ -275,7 +285,20 @@ pub fn unwrapped(
                 .get(&name_str)
                 .unwrap_or(&true)
         {
-            return quote! { #name: from.#name.unwrap_or_default() };
+            // Priority-based default resolution:
+            // 1. Check programmatic defaults (highest priority)
+            // 2. Check attribute-based defaults
+            // 3. Fall back to unwrap_or_default()
+            let default_expr = proc_usage_opts
+                .field_opts
+                .get(&name_str)
+                .and_then(|o| o.default_expr.clone())
+                .or_else(|| field_opts.default.as_ref().map(|e| quote! { #e }));
+
+            return match default_expr {
+                Some(expr) => quote! { #name: from.#name.unwrap_or(#expr) },
+                None => quote! { #name: from.#name.unwrap_or_default() },
+            };
         }
         quote! { #name: from.#name }
     });
