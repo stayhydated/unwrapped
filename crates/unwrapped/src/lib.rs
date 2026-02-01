@@ -1,5 +1,4 @@
 #[doc = include_str!("../README.md")]
-
 /// Error returned by `try_from()` when an `Option` field is `None`.
 ///
 /// Contains the name of the field that failed to unwrap, useful for debugging

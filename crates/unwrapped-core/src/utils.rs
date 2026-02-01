@@ -26,7 +26,7 @@ pub fn get_struct_data(input: &DeriveInput) -> &syn::DataStruct {
 }
 
 /// Common options struct for both Unwrapped and Wrapped
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct CommonOpts {
     pub name: Option<syn::Ident>,
     pub prefix: Option<syn::Ident>,
@@ -89,19 +89,6 @@ impl CommonOpts {
             .or_default()
             .push(tokens.into());
         self
-    }
-}
-
-impl Default for CommonOpts {
-    fn default() -> Self {
-        Self {
-            name: None,
-            prefix: None,
-            suffix: None,
-            struct_derives: Vec::new(),
-            struct_attrs: Vec::new(),
-            field_attrs: HashMap::new(),
-        }
     }
 }
 
