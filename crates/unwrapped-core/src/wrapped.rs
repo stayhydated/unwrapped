@@ -2,19 +2,19 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use darling::{FromDeriveInput, FromField};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::DeriveInput;
 
 use crate::utils::{
-    CommonOpts, ProcUsageOpts, build_derive_output, collect_field_attrs, get_struct_data,
-    is_option_type,
+    CommonOpts, ProcUsageOpts, bon_builder_info, build_derive_output, collect_field_attrs,
+    generic_args, get_struct_data, is_option_type, raw_ident_name, snake_to_pascal_ident,
+    unique_state_ident,
 };
 
 #[derive(Clone, Debug, Default, FromField)]
 #[darling(default, attributes(wrapped))]
 struct WrappedFieldOpts {
     skip: bool,
-    default: Option<syn::Expr>, // Parse custom default expression
 }
 
 #[derive(Builder, Clone, Debug, FromDeriveInput)]
@@ -94,7 +94,6 @@ impl WrappedOpts {
 pub struct FieldProcOpts {
     pub wrap: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
-    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl FieldProcOpts {
@@ -102,18 +101,11 @@ impl FieldProcOpts {
         Self {
             wrap,
             attrs: Vec::new(),
-            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
-        self
-    }
-
-    /// Set custom default expression
-    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
-        self.default_expr = Some(tokens.into());
         self
     }
 }
@@ -170,7 +162,6 @@ impl WrappedProcUsageOpts {
                 crate::utils::FieldProcOpts {
                     transform: opts.wrap,
                     attrs: opts.attrs.clone(),
-                    default_expr: opts.default_expr.clone(),
                 },
             );
         }
@@ -280,15 +271,6 @@ pub fn wrapped(
 
         if is_already_option || !should_process {
             Some(quote! { #name: from.#name })
-        } else if let Some(default_expr) = &field_opts.default {
-            // If value equals default, store as None
-            Some(quote! {
-                #name: if from.#name == (#default_expr) {
-                    None
-                } else {
-                    Some(from.#name)
-                }
-            })
         } else {
             Some(quote! { #name: Some(from.#name) })
         }
@@ -352,9 +334,6 @@ pub fn wrapped(
                 if is_already_option || !should_process {
                     // Already Option or not processed -> keep as is
                     quote! { #name: self.#name }
-                } else if let Some(default_expr) = &field_opts.default {
-                    // Unwrap with default value
-                    quote! { #name: self.#name.unwrap_or_else(|| #default_expr) }
                 } else {
                     // Unwrap Option, return error if None
                     let field_name_str = name.as_ref().unwrap().to_string();
@@ -362,6 +341,100 @@ pub fn wrapped(
                 }
             }
         });
+
+        let builder_helper = if let Some(builder_info) = bon_builder_info(input) {
+            let builder_ident = &builder_info.builder_ident;
+            let state_mod_ident = &builder_info.state_mod_ident;
+            let state_ident = unique_state_ident(&input.generics);
+
+            let mut builder_generics = input.generics.clone();
+            builder_generics
+                .params
+                .push(syn::parse_quote!(#state_ident));
+            builder_generics
+                .make_where_clause()
+                .predicates
+                .push(syn::parse_quote!(#state_ident: #state_mod_ident::State));
+            let (builder_impl_generics, builder_ty_generics, builder_where_clause) =
+                builder_generics.split_for_impl();
+
+            let orig_ty_args = generic_args(&input.generics);
+
+            let mut setter_calls = Vec::new();
+            let mut set_idents = Vec::new();
+            let mut state_bounds = Vec::new();
+
+            for f in s.fields.iter() {
+                let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+                if field_opts.skip {
+                    continue;
+                }
+
+                let name = f.ident.as_ref().expect("Expected named field");
+                let ty = &f.ty;
+                let name_str = name.to_string();
+
+                let is_already_option = is_option_type(ty).is_some();
+                let should_process = *proc_usage_opts
+                    .fields_to_wrap
+                    .get(&name_str)
+                    .unwrap_or(&true);
+
+                let (setter_ident, value) = if is_already_option {
+                    let maybe_name =
+                        syn::Ident::new(&format!("maybe_{}", raw_ident_name(name)), name.span());
+                    (maybe_name, quote! { w.#name })
+                } else if !should_process {
+                    (name.clone(), quote! { w.#name })
+                } else {
+                    let field_name_str = name.to_string();
+                    (
+                        name.clone(),
+                        quote! { w.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? },
+                    )
+                };
+
+                setter_calls.push(quote! { .#setter_ident(#value) });
+
+                let field_pascal = snake_to_pascal_ident(name);
+                let set_ident = format_ident!("Set{}", field_pascal);
+                set_idents.push(set_ident);
+                state_bounds
+                    .push(quote! { #state_ident::#field_pascal: #state_mod_ident::IsUnset });
+            }
+
+            let state_chain = set_idents.iter().fold(
+                quote! { #state_ident },
+                |state, set_ident| quote! { #state_mod_ident::#set_ident<#state> },
+            );
+
+            let builder_return_ty = if orig_ty_args.is_empty() {
+                quote! { #builder_ident <#state_chain> }
+            } else {
+                quote! { #builder_ident <#(#orig_ty_args,)* #state_chain> }
+            };
+
+            let method_where = if state_bounds.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#state_bounds,)* }
+            };
+
+            quote! {
+                impl #builder_impl_generics #builder_ident #builder_ty_generics #builder_where_clause {
+                    /// Pre-fill the builder with the non-skipped fields from the wrapped struct.
+                    ///
+                    /// Returns an error if any required wrapped field is `None`.
+                    pub fn from_wrapped(self, w: #wrapped_ident #ty_generics) -> Result<#builder_return_ty, ::#lib_path::UnwrappedError>
+                    #method_where
+                    {
+                        Ok(self #(#setter_calls)*)
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
 
         quote! {
             #(#struct_attrs)*
@@ -380,13 +453,15 @@ pub fn wrapped(
                 /// This method takes the skipped fields as parameters and reconstructs
                 /// the original struct with non-skipped fields from `self`.
                 ///
-                /// Returns an error if any non-skipped wrapped field is `None` (unless it has a default).
+                /// Returns an error if any non-skipped wrapped field is `None`.
                 pub fn into_original(self, #(#skipped_params),*) -> Result<#original_ident #ty_generics, ::#lib_path::UnwrappedError> {
                     Ok(#original_ident {
                         #(#into_original_fields),*
                     })
                 }
             }
+
+            #builder_helper
         }
     } else {
         quote! {

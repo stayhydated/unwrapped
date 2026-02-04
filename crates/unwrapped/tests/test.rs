@@ -545,3 +545,50 @@ fn test_wrapped_skip_field_into_original() {
     assert_eq!(reconstructed.created_at, 2222222222);
     assert_eq!(reconstructed.version, "v4.0".to_string());
 }
+
+#[test]
+fn test_wrapped_skip_field_with_bon_builder_pattern() {
+    #[derive(Debug, PartialEq, Wrapped, bon::Builder)]
+    #[wrapped(name = UserFormW)]
+    #[builder(on(Option<String>, into))]
+    struct UserForm {
+        name: String,
+        email: String,
+        note: Option<String>,
+        #[wrapped(skip)]
+        created_at: i64,
+        #[wrapped(skip)]
+        id: u64,
+    }
+
+    let wrapped = UserFormW {
+        name: Some("Alice".to_string()),
+        email: Some("alice@example.com".to_string()),
+        note: Some("hello".to_string()),
+    };
+
+    let original = UserForm::builder()
+        .from_wrapped(wrapped)
+        .unwrap()
+        .created_at(1234567890)
+        .id(42)
+        .build();
+
+    assert_eq!(original.name, "Alice".to_string());
+    assert_eq!(original.email, "alice@example.com".to_string());
+    assert_eq!(original.note, Some("hello".to_string()));
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.id, 42);
+
+    let wrapped_missing = UserFormW {
+        name: None,
+        email: Some("bob@example.com".to_string()),
+        note: None,
+    };
+
+    let err = UserForm::builder()
+        .from_wrapped(wrapped_missing)
+        .err()
+        .expect("expected error");
+    assert_eq!(err.field_name, "name");
+}

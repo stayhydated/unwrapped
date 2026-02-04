@@ -32,8 +32,7 @@ The crate exposes a single entry point function `unwrapped()` that takes a parse
 
 Given an input struct, the function generates:
 
-1. **Unwrapped struct** with `#[derive(Clone, Debug, Default)]`
-1. **`From<Original>` for Unwrapped** using `unwrap_or_default()`
+1. **Unwrapped struct** with the derives configured via `Opts`
 1. **`From<Unwrapped>` for Original** wrapping in `Some()`
 1. **`Unwrapped` trait impl** associating types
 1. **`try_from()` method** returning `UnwrappedError` on `None`
@@ -95,4 +94,4 @@ The `Opts::unwrapped_ident()` method determines the generated struct name:
 
 ## Where Clause Handling
 
-The `From<Original>` impl adds `Default` bounds for unwrapped `Option<T>` types to support `unwrap_or_default()`. Other impls preserve the original where clause.
+All impls preserve the original where clause; no additional trait bounds are introduced for defaults.

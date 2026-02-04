@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use ident_case::RenameRule;
 use quote::{format_ident, quote};
-use syn::DeriveInput;
+use syn::parse::Parser;
+use syn::{DeriveInput, Expr, GenericParam, Meta, Path};
 
 /// Check if a type is `Option<T>` and return the inner type if so
 pub fn is_option_type(ty: &syn::Type) -> Option<&syn::Type> {
@@ -97,7 +99,6 @@ impl CommonOpts {
 pub struct FieldProcOpts {
     pub transform: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
-    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl FieldProcOpts {
@@ -105,18 +106,11 @@ impl FieldProcOpts {
         Self {
             transform,
             attrs: Vec::new(),
-            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
-        self
-    }
-
-    /// Set custom default expression
-    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
-        self.default_expr = Some(tokens.into());
         self
     }
 }
@@ -206,4 +200,197 @@ pub fn build_derive_output(
     } else {
         quote! { #[derive(#(#struct_derives),*)] }
     }
+}
+
+#[derive(Default)]
+struct BonBuilderConfig {
+    builder_type: Option<syn::Ident>,
+    state_mod: Option<syn::Ident>,
+}
+
+pub(crate) struct BonBuilderInfo {
+    pub(crate) builder_ident: syn::Ident,
+    pub(crate) state_mod_ident: syn::Ident,
+}
+
+fn derives_builder(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("derive") {
+            return false;
+        }
+        let paths = attr
+            .parse_args_with(syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated);
+        let Ok(paths) = paths else {
+            return false;
+        };
+        paths.iter().any(|path| {
+            path.segments
+                .last()
+                .map(|seg| seg.ident == "Builder")
+                .unwrap_or(false)
+        })
+    })
+}
+
+fn has_builder_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| attr.path().is_ident("builder"))
+}
+
+fn parse_builder_config(attrs: &[syn::Attribute]) -> BonBuilderConfig {
+    let mut config = BonBuilderConfig::default();
+
+    for attr in attrs {
+        if !attr.path().is_ident("builder") {
+            continue;
+        }
+        let meta = match &attr.meta {
+            Meta::List(list) => list,
+            _ => continue,
+        };
+        let Some(nested) = parse_meta_list(meta.tokens.clone()) else {
+            continue;
+        };
+
+        for item in nested {
+            if let Some(ident) = parse_builder_item_ident(&item, "builder_type") {
+                config.builder_type = Some(ident);
+            }
+            if let Some(ident) = parse_builder_item_ident(&item, "state_mod") {
+                config.state_mod = Some(ident);
+            }
+        }
+    }
+
+    config
+}
+
+fn parse_builder_item_ident(item: &Meta, key: &str) -> Option<syn::Ident> {
+    match item {
+        Meta::NameValue(nv) if nv.path.is_ident(key) => parse_meta_value_ident(&nv.value),
+        Meta::List(list) if list.path.is_ident(key) => {
+            let nested = parse_meta_list(list.tokens.clone())?;
+            for inner in nested {
+                if let Meta::NameValue(nv) = inner
+                    && nv.path.is_ident("name")
+                    && let Some(ident) = parse_meta_value_ident(&nv.value)
+                {
+                    return Some(ident);
+                }
+            }
+            None
+        },
+        _ => None,
+    }
+}
+
+fn parse_meta_list(
+    tokens: proc_macro2::TokenStream,
+) -> Option<syn::punctuated::Punctuated<Meta, syn::Token![,]>> {
+    let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+    parser.parse2(tokens).ok()
+}
+
+fn parse_meta_value_ident(expr: &Expr) -> Option<syn::Ident> {
+    match expr {
+        Expr::Path(path) => path.path.segments.last().map(|seg| seg.ident.clone()),
+        Expr::Lit(lit) => {
+            if let syn::Lit::Str(lit_str) = &lit.lit {
+                syn::parse_str::<syn::Ident>(&lit_str.value()).ok()
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn bon_builder_info(input: &DeriveInput) -> Option<BonBuilderInfo> {
+    if !derives_builder(&input.attrs) && !has_builder_attr(&input.attrs) {
+        return None;
+    }
+
+    let config = parse_builder_config(&input.attrs);
+
+    let builder_ident = config
+        .builder_type
+        .unwrap_or_else(|| format_ident!("{}Builder", input.ident));
+
+    let state_mod_ident = config
+        .state_mod
+        .unwrap_or_else(|| pascal_to_snake_ident(&builder_ident));
+
+    Some(BonBuilderInfo {
+        builder_ident,
+        state_mod_ident,
+    })
+}
+
+pub(crate) fn raw_ident_name(ident: &syn::Ident) -> String {
+    ident
+        .to_string()
+        .strip_prefix("r#")
+        .unwrap_or(&ident.to_string())
+        .to_string()
+}
+
+fn pascal_to_snake_ident(ident: &syn::Ident) -> syn::Ident {
+    let renamed = RenameRule::SnakeCase.apply_to_variant(raw_ident_name(ident));
+    syn::Ident::new(&renamed, proc_macro2::Span::call_site())
+}
+
+pub(crate) fn snake_to_pascal_ident(ident: &syn::Ident) -> syn::Ident {
+    let renamed = RenameRule::PascalCase.apply_to_field(raw_ident_name(ident));
+    syn::Ident::new(&renamed, proc_macro2::Span::call_site())
+}
+
+pub(crate) fn unique_state_ident(generics: &syn::Generics) -> syn::Ident {
+    let mut existing = HashSet::new();
+    for param in generics.params.iter() {
+        match param {
+            GenericParam::Type(param) => {
+                existing.insert(param.ident.to_string());
+            },
+            GenericParam::Lifetime(param) => {
+                existing.insert(param.lifetime.ident.to_string());
+            },
+            GenericParam::Const(param) => {
+                existing.insert(param.ident.to_string());
+            },
+        }
+    }
+
+    let base = "__UnwrappedBuilderState";
+    if !existing.contains(base) {
+        return syn::Ident::new(base, proc_macro2::Span::call_site());
+    }
+
+    let mut i = 0;
+    loop {
+        let candidate = format!("{base}{i}");
+        if !existing.contains(&candidate) {
+            return syn::Ident::new(&candidate, proc_macro2::Span::call_site());
+        }
+        i += 1;
+    }
+}
+
+pub(crate) fn generic_args(generics: &syn::Generics) -> Vec<proc_macro2::TokenStream> {
+    generics
+        .params
+        .iter()
+        .map(|param| match param {
+            GenericParam::Type(param) => {
+                let ident = &param.ident;
+                quote! { #ident }
+            },
+            GenericParam::Lifetime(param) => {
+                let lifetime = &param.lifetime;
+                quote! { #lifetime }
+            },
+            GenericParam::Const(param) => {
+                let ident = &param.ident;
+                quote! { #ident }
+            },
+        })
+        .collect()
 }
