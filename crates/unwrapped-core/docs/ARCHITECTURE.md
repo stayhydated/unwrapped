@@ -19,7 +19,7 @@ The crate exposes a single entry point function `unwrapped()` that takes a parse
 
 - **`FieldOpts`** - Field-level configuration parsed from `#[unwrapped(...)]` attributes
 
-  - `skip` - When true, the field remains `Option<T>` in the unwrapped struct
+  - `skip` - When true, the field is completely removed from the unwrapped struct. If any field has `skip`, `From` implementations are not generated.
 
 - **`ProcUsageOpts`** - Runtime options for proc-macro authors
 
@@ -47,10 +47,11 @@ graph TD
     C --> D{Is Option<T>?}
     D -->|Yes| E{skip = true?}
     D -->|No| F[Keep original type]
-    E -->|Yes| F
+    E -->|Yes| R[Remove field entirely]
     E -->|No| G[Extract inner T]
     G --> H[Generate field as T]
     F --> H
+    R --> H
     H --> I[Generate struct definition]
     H --> J[Generate From impls]
     H --> K[Generate try_from method]
@@ -60,6 +61,29 @@ graph TD
     K --> M
     L --> M
 ```
+
+## Skip Field Behavior
+
+When a field has the `skip` attribute:
+- The field is completely removed from the generated struct
+- `From` trait implementations are **not generated** (bidirectional conversion is impossible without all fields)
+- `#[derive(bon::Builder)]` is automatically added to make construction easier
+- Only the struct definition, `Unwrapped` trait impl, and `try_from` method are generated
+
+This allows creating partial struct variants where certain fields are intentionally excluded from the unwrapped version.
+
+### Builder Pattern
+
+When `skip` is used, the generated struct includes `#[derive(::bon::Builder)]`, providing a fluent builder API:
+
+```rust
+let unwrapped = MyStructUw::builder()
+    .field_a(value1)
+    .field_b(value2)
+    .build();
+```
+
+This compensates for the missing `From` implementations and provides an ergonomic way to construct the partial structs.
 
 ## Naming Strategy
 

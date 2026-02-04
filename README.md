@@ -22,43 +22,54 @@ pub struct Ab {
 pub struct AbUw {
   a : Ab,
   b : u8,
-  c : Option<String>,
+  // c is not included - skip removes the field entirely
 }
 ```
 
-## Conversions
+Fields marked with `#[unwrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, the `From` trait implementations are not generated (since conversion is impossible without all fields).
 
-### Defaulting
+### Converting Back with Skipped Fields
 
-Uses `unwrap_or_default()` on `Option` fields, which requires the field's `T` to implement `Default`.
+When fields are skipped, an `into_original` helper method is generated that allows you to reconstruct the original struct by providing values for the skipped fields:
 
 ```rust
 use unwrapped::Unwrapped;
 
 #[derive(Debug, PartialEq, Unwrapped)]
-struct WithDefaults {
-    val1: Option<i32>,       // i32::default() is 0
-    val2: Option<String>,    // String::default() is ""
-    val3: String,            // Not an Option, so it's unchanged
-    val4: Option<Vec<u8>>,   // Vec::default() is an empty vector
+#[unwrapped(name = UserFormUw)]
+struct UserForm {
+    name: Option<String>,
+    email: Option<String>,
+    #[unwrapped(skip)]
+    created_at: i64,
+    #[unwrapped(skip)]
+    id: u64,
 }
 
-let original = WithDefaults {
-    val1: None,
-    val2: Some("hello".to_string()),
-    val3: "world".to_string(),
-    val4: None,
+// Create an unwrapped struct (without skipped fields)
+let form = UserFormUw {
+    name: "Alice".to_string(),
+    email: "alice@example.com".to_string(),
 };
 
-let unwrapped: WithDefaultsUw = original.into();
+// Convert back to original using into_original, providing skipped fields
+let original = form.into_original(1234567890, 42);
 
-assert_eq!(unwrapped.val1, 0);
-assert_eq!(unwrapped.val2, "hello".to_string());
-assert_eq!(unwrapped.val3, "world".to_string());
-assert_eq!(unwrapped.val4, Vec::<u8>::new());
+assert_eq!(original.name, Some("Alice".to_string()));
+assert_eq!(original.email, Some("alice@example.com".to_string()));
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.id, 42);
 ```
 
-### Fallible
+## Conversions
+
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
+
+- **NO `From<Original> for Unwrapped`** - Would panic if any Option is None
+- **Use `try_from()` instead** - Returns `Result`, fails if any Option field is None
+- **`From<Unwrapped> for Original`** - Always safe (wraps fields in Some)
+
+### Fallible Conversion
 
 ```rust
 use unwrapped::{Unwrapped, UnwrappedError};
@@ -76,12 +87,22 @@ let original_fail = Simple {
     field3: Some(200),
 };
 
+// try_from returns Err if any Option field is None
 let result = SimpleUw::try_from(original_fail);
 assert!(result.is_err());
 match result {
     Err(e) => assert_eq!(e.field_name, "field1"),
     Ok(_) => panic!("Expected error"),
 }
+
+// Convert back (always safe - wraps in Some)
+let simple_uw = SimpleUw {
+    field1: 42,
+    field2: "test".to_string(),
+    field3: 100,
+};
+let back_to_original: Simple = simple_uw.into();
+assert_eq!(back_to_original.field1, Some(42));
 ```
 
 ## Customizing the Generated Struct Name
@@ -140,37 +161,58 @@ pub struct Config {
 pub struct ConfigW {
   timeout: Option<u64>,
   retries: Option<i32>,
-  name: String,
+  // name is not included - skip removes the field entirely
 }
 ```
 
-## Conversions
+Fields marked with `#[wrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, the `From` trait implementations are not generated (since conversion is impossible without all fields).
 
-### Defaulting
+### Converting Back with Skipped Fields
 
-Uses `unwrap_or_default()` on `Option` fields when converting back to the original struct.
+When fields are skipped, an `into_original` helper method is generated that allows you to reconstruct the original struct by providing values for the skipped fields:
 
 ```rust
 use unwrapped::Wrapped;
 
 #[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(name = ConfigW)]
 struct Config {
     timeout: u64,
     retries: i32,
+    #[wrapped(skip)]
+    created_at: i64,
+    #[wrapped(skip)]
+    version: String,
 }
 
+// Create a wrapped struct (without skipped fields)
 let wrapped = ConfigW {
     timeout: Some(30),
-    retries: None,
+    retries: Some(3),
 };
 
-let config: Config = wrapped.into();
+// Convert back to original using into_original, providing skipped fields
+let original = wrapped
+    .into_original(1234567890, "v1.0".to_string())
+    .unwrap();
 
-assert_eq!(config.timeout, 30);
-assert_eq!(config.retries, 0);  // Default i32
+assert_eq!(original.timeout, 30);
+assert_eq!(original.retries, 3);
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.version, "v1.0".to_string());
 ```
 
-### Fallible
+Note: `into_original` returns a `Result` because wrapped fields might be `None`.
+
+## Conversions
+
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
+
+- **`From<Original> for Wrapped`** - Always safe (wraps fields in Some)
+- **NO `From<Wrapped> for Original`** - Would panic if any Option is None
+- **Use `try_from()` instead** - Returns `Result`, fails if any Option field is None
+
+### Fallible Conversion
 
 ```rust
 use unwrapped::{Wrapped, UnwrappedError};
@@ -181,17 +223,27 @@ struct Config {
     retries: i32,
 }
 
+// try_from returns Err if any wrapped field is None
 let wrapped_missing = ConfigW {
     timeout: Some(30),
     retries: None,
 };
 
-let result: Result<Config, UnwrappedError> = ConfigW::try_from(wrapped_missing);
+let result = ConfigW::try_from(wrapped_missing);
 assert!(result.is_err());
 match result {
     Err(e) => assert_eq!(e.field_name, "retries"),
     Ok(_) => panic!("Expected error"),
 }
+
+// Success when all fields are Some
+let wrapped_ok = ConfigW {
+    timeout: Some(30),
+    retries: Some(3),
+};
+let config: Config = ConfigW::try_from(wrapped_ok).unwrap();
+assert_eq!(config.timeout, 30);
+assert_eq!(config.retries, 3);
 ```
 
 ## Customizing the Generated Struct Name
@@ -308,3 +360,15 @@ pub fn my_wrapped_macro(input: TokenStream) -> TokenStream {
     expanded.into()
 }
 ```
+
+| Feature                               | WITHOUT `skip`          | WITH `skip`              |
+| ------------------------------------- | ----------------------- | ------------------------ |
+| **Generated struct**                  | All fields transformed  | Skipped fields removed   |
+| **`From<Original> for Generated`**    | ❌ Never (would panic)  | ❌ Never                 |
+| **`From<Generated> for Original`**    | ✅ Yes (Unwrapped only) | ❌ No                    |
+| **`From<Original> for Generated`**    | ✅ Yes (Wrapped only)   | ❌ No                    |
+| **`try_from` (Original → Generated)** | ✅ Yes                  | ✅ Yes (ignores skipped) |
+| **`try_from` (Generated → Original)** | ✅ Yes (Wrapped only)   | ❌ No                    |
+| **`into_original` (Generated → Original)** | ❌ No              | ✅ Yes (requires skipped field params) |
+| **Panics**                            | ❌ Never                | ❌ Never                 |
+| **Defaults**                          | ❌ Never                | ❌ Never                 |

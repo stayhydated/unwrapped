@@ -22,43 +22,21 @@ pub struct Ab {
 pub struct AbUw {
   a : Ab,
   b : u8,
-  c : Option<String>,
+  // c is not included - skip removes the field entirely
 }
 ```
+
+Fields marked with `#[unwrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, the `From` trait implementations are not generated (since conversion is impossible without all fields).
 
 ## Conversions
 
-### Defaulting
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
 
-Uses `unwrap_or_default()` on `Option` fields, which requires the field's `T` to implement `Default`.
+- **NO `From<Original> for Unwrapped`** - Would panic if any Option is None
+- **Use `try_from()` instead** - Returns `Result`, fails if any Option field is None
+- **`From<Unwrapped> for Original`** - Always safe (wraps fields in Some)
 
-```rust
-use unwrapped::Unwrapped;
-
-#[derive(Debug, PartialEq, Unwrapped)]
-struct WithDefaults {
-    val1: Option<i32>,       // i32::default() is 0
-    val2: Option<String>,    // String::default() is ""
-    val3: String,            // Not an Option, so it's unchanged
-    val4: Option<Vec<u8>>,   // Vec::default() is an empty vector
-}
-
-let original = WithDefaults {
-    val1: None,
-    val2: Some("hello".to_string()),
-    val3: "world".to_string(),
-    val4: None,
-};
-
-let unwrapped: WithDefaultsUw = original.into();
-
-assert_eq!(unwrapped.val1, 0);
-assert_eq!(unwrapped.val2, "hello".to_string());
-assert_eq!(unwrapped.val3, "world".to_string());
-assert_eq!(unwrapped.val4, Vec::<u8>::new());
-```
-
-### Fallible
+### Fallible Conversion
 
 ```rust
 use unwrapped::{Unwrapped, UnwrappedError};
@@ -76,12 +54,22 @@ let original_fail = Simple {
     field3: Some(200),
 };
 
+// try_from returns Err if any Option field is None
 let result = SimpleUw::try_from(original_fail);
 assert!(result.is_err());
 match result {
     Err(e) => assert_eq!(e.field_name, "field1"),
     Ok(_) => panic!("Expected error"),
 }
+
+// Convert back (always safe - wraps in Some)
+let simple_uw = SimpleUw {
+    field1: 42,
+    field2: "test".to_string(),
+    field3: 100,
+};
+let back_to_original: Simple = simple_uw.into();
+assert_eq!(back_to_original.field1, Some(42));
 ```
 
 ## Customizing the Generated Struct Name
@@ -140,37 +128,21 @@ pub struct Config {
 pub struct ConfigW {
   timeout: Option<u64>,
   retries: Option<i32>,
-  name: String,
+  // name is not included - skip removes the field entirely
 }
 ```
+
+Fields marked with `#[wrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, the `From` trait implementations are not generated (since conversion is impossible without all fields).
 
 ## Conversions
 
-### Defaulting
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
 
-Uses `unwrap_or_default()` on `Option` fields when converting back to the original struct.
+- **`From<Original> for Wrapped`** - Always safe (wraps fields in Some)
+- **NO `From<Wrapped> for Original`** - Would panic if any Option is None  
+- **Use `try_from()` instead** - Returns `Result`, fails if any Option field is None
 
-```rust
-use unwrapped::Wrapped;
-
-#[derive(Debug, PartialEq, Wrapped)]
-struct Config {
-    timeout: u64,
-    retries: i32,
-}
-
-let wrapped = ConfigW {
-    timeout: Some(30),
-    retries: None,
-};
-
-let config: Config = wrapped.into();
-
-assert_eq!(config.timeout, 30);
-assert_eq!(config.retries, 0);  // Default i32
-```
-
-### Fallible
+### Fallible Conversion
 
 ```rust
 use unwrapped::{Wrapped, UnwrappedError};
@@ -181,17 +153,27 @@ struct Config {
     retries: i32,
 }
 
+// try_from returns Err if any wrapped field is None
 let wrapped_missing = ConfigW {
     timeout: Some(30),
     retries: None,
 };
 
-let result: Result<Config, UnwrappedError> = ConfigW::try_from(wrapped_missing);
+let result = ConfigW::try_from(wrapped_missing);
 assert!(result.is_err());
 match result {
     Err(e) => assert_eq!(e.field_name, "retries"),
     Ok(_) => panic!("Expected error"),
 }
+
+// Success when all fields are Some
+let wrapped_ok = ConfigW {
+    timeout: Some(30),
+    retries: Some(3),
+};
+let config: Config = ConfigW::try_from(wrapped_ok).unwrap();
+assert_eq!(config.timeout, 30);
+assert_eq!(config.retries, 3);
 ```
 
 ## Customizing the Generated Struct Name

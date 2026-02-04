@@ -200,176 +200,222 @@ pub fn wrapped(
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let s = get_struct_data(input);
 
-    // Generate wrapped struct fields - all non-Option<T> fields become Option<T>
-    let fields = s.fields.iter().map(|f| {
+    // Check if any field has skip attribute
+    let has_skipped_fields = s.fields.iter().any(|f| {
         let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+        field_opts.skip
+    });
+
+    // Generate wrapped struct fields - all non-Option<T> fields become Option<T>
+    let fields = s.fields.iter().filter_map(|f| {
+        let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field entirely if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
 
         let is_already_option = is_option_type(ty).is_some();
-        let should_skip = field_opts.skip
-            || !proc_usage_opts
-                .fields_to_wrap
-                .get(&name_str)
-                .unwrap_or(&true);
+        let should_process = *proc_usage_opts
+            .fields_to_wrap
+            .get(&name_str)
+            .unwrap_or(&true);
 
         // Collect field attributes
         let field_attrs = collect_field_attrs(f, &common_opts, &common_proc_opts);
 
-        if is_already_option || should_skip {
-            quote! { #(#field_attrs)* pub #name: #ty }
+        if is_already_option || !should_process {
+            Some(quote! { #(#field_attrs)* pub #name: #ty })
         } else {
-            quote! { #(#field_attrs)* pub #name: Option<#ty> }
+            Some(quote! { #(#field_attrs)* pub #name: Option<#ty> })
         }
     });
 
-    // Generate From<Wrapped> for Original - unwrap values (or use default)
-    let from_fields = s.fields.iter().map(|f| {
+    // Generate From<Wrapped> for Original - unwrap values (no defaults)
+    let _from_fields = s.fields.iter().filter_map(|f| {
         let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
 
         let is_already_option = is_option_type(ty).is_some();
-        let should_skip = field_opts.skip
-            || !proc_usage_opts
-                .fields_to_wrap
-                .get(&name_str)
-                .unwrap_or(&true);
+        let should_process = *proc_usage_opts
+            .fields_to_wrap
+            .get(&name_str)
+            .unwrap_or(&true);
 
-        if is_already_option || should_skip {
-            quote! { #name: from.#name }
+        if is_already_option || !should_process {
+            Some(quote! { #name: from.#name })
         } else {
-            // Priority-based default resolution:
-            // 1. Check programmatic defaults (highest priority)
-            // 2. Check attribute-based defaults
-            // 3. Fall back to unwrap_or_default()
-            let default_expr = proc_usage_opts
-                .field_opts
-                .get(&name_str)
-                .and_then(|o| o.default_expr.clone())
-                .or_else(|| field_opts.default.as_ref().map(|e| quote! { #e }));
-
-            match default_expr {
-                Some(expr) => quote! { #name: from.#name.unwrap_or(#expr) },
-                None => quote! { #name: from.#name.unwrap_or_default() },
-            }
+            let field_name_str = name.as_ref().unwrap().to_string();
+            Some(quote! { #name: from.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? })
         }
     });
 
     // Generate From<Original> for Wrapped - wrap values in Some()
-    let to_wrapped_fields = s.fields.iter().map(|f| {
+    let to_wrapped_fields = s.fields.iter().filter_map(|f| {
         let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
 
         let is_already_option = is_option_type(ty).is_some();
-        let should_skip = field_opts.skip
-            || !proc_usage_opts
-                .fields_to_wrap
-                .get(&name_str)
-                .unwrap_or(&true);
+        let should_process = *proc_usage_opts
+            .fields_to_wrap
+            .get(&name_str)
+            .unwrap_or(&true);
 
-        if is_already_option || should_skip {
-            quote! { #name: from.#name }
+        if is_already_option || !should_process {
+            Some(quote! { #name: from.#name })
         } else if let Some(default_expr) = &field_opts.default {
             // If value equals default, store as None
-            quote! {
+            Some(quote! {
                 #name: if from.#name == (#default_expr) {
                     None
                 } else {
                     Some(from.#name)
                 }
-            }
+            })
         } else {
-            quote! { #name: Some(from.#name) }
+            Some(quote! { #name: Some(from.#name) })
         }
     });
 
     // Generate try_from method for Wrapped -> Original (returns error if any required field is None)
-    let try_from_fields = s.fields.iter().map(|f| {
+    let try_from_fields = s.fields.iter().filter_map(|f| {
         let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
 
         let is_already_option = is_option_type(ty).is_some();
-        let should_skip = field_opts.skip
-            || !proc_usage_opts.fields_to_wrap.get(&name_str).unwrap_or(&true);
+        let should_process = *proc_usage_opts.fields_to_wrap.get(&name_str).unwrap_or(&true);
 
-        if is_already_option || should_skip {
-            quote! { #name: from.#name }
+        if is_already_option || !should_process {
+            Some(quote! { #name: from.#name })
         } else {
             let field_name_str = name.as_ref().unwrap().to_string();
-            quote! { #name: from.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? }
+            Some(quote! { #name: from.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? })
         }
     });
-
-    // Generate where clause with Default bounds for types that get unwrapped
-    let mut try_from_where_clause = where_clause.cloned();
-    let new_predicates: Vec<syn::WherePredicate> = s
-        .fields
-        .iter()
-        .filter_map(|f| {
-            let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
-            let ty = &f.ty;
-            let name_str = f.ident.as_ref().unwrap().to_string();
-            let should_wrap = !field_opts.skip
-                && *proc_usage_opts
-                    .fields_to_wrap
-                    .get(&name_str)
-                    .unwrap_or(&true);
-
-            if is_option_type(ty).is_none() && should_wrap {
-                return Some(syn::parse_quote!(#ty: ::core::default::Default));
-            }
-            None
-        })
-        .collect();
-
-    if !new_predicates.is_empty() {
-        let wc = try_from_where_clause.get_or_insert_with(|| syn::parse_quote!(where));
-        wc.predicates.extend(new_predicates);
-    }
 
     // Build struct-level attributes and derives
     let struct_attrs = &opts.struct_attrs;
     let derive_output = build_derive_output(&opts.struct_derives);
 
-    quote! {
-        #(#struct_attrs)*
-        #derive_output
-        pub struct #wrapped_ident #ty_generics #where_clause {
-            #(#fields),*
-        }
+    // Only generate From implementations if there are no skipped fields
+    if has_skipped_fields {
+        // Collect skipped fields for into_original method
+        let skipped_params = s.fields.iter().filter_map(|f| {
+            let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+            if field_opts.skip {
+                let name = &f.ident;
+                let ty = &f.ty;
+                Some(quote! { #name: #ty })
+            } else {
+                None
+            }
+        });
 
-        impl #impl_generics From<#original_ident #ty_generics> for #wrapped_ident #ty_generics #where_clause {
-            fn from(from: #original_ident #ty_generics) -> Self {
-                Self {
-                    #(#to_wrapped_fields),*
+        // Build field assignments for into_original
+        let into_original_fields = s.fields.iter().map(|f| {
+            let field_opts = WrappedFieldOpts::from_field(f).expect("Wrong field options");
+            let name = &f.ident;
+            let ty = &f.ty;
+            let name_str = name.as_ref().unwrap().to_string();
+
+            if field_opts.skip {
+                // Skipped fields come from parameters
+                quote! { #name }
+            } else {
+                let is_already_option = is_option_type(ty).is_some();
+                let should_process = *proc_usage_opts.fields_to_wrap.get(&name_str).unwrap_or(&true);
+
+                if is_already_option || !should_process {
+                    // Already Option or not processed -> keep as is
+                    quote! { #name: self.#name }
+                } else if let Some(default_expr) = &field_opts.default {
+                    // Unwrap with default value
+                    quote! { #name: self.#name.unwrap_or_else(|| #default_expr) }
+                } else {
+                    // Unwrap Option, return error if None
+                    let field_name_str = name.as_ref().unwrap().to_string();
+                    quote! { #name: self.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? }
+                }
+            }
+        });
+
+        quote! {
+            #(#struct_attrs)*
+            #derive_output
+            pub struct #wrapped_ident #ty_generics #where_clause {
+                #(#fields),*
+            }
+
+            impl #impl_generics ::#lib_path::Wrapped for #original_ident #ty_generics #where_clause {
+                type Wrapped = #wrapped_ident #ty_generics;
+            }
+
+            impl #impl_generics #wrapped_ident #ty_generics #where_clause {
+                /// Convert back to the original struct by providing values for skipped fields.
+                ///
+                /// This method takes the skipped fields as parameters and reconstructs
+                /// the original struct with non-skipped fields from `self`.
+                ///
+                /// Returns an error if any non-skipped wrapped field is `None` (unless it has a default).
+                pub fn into_original(self, #(#skipped_params),*) -> Result<#original_ident #ty_generics, ::#lib_path::UnwrappedError> {
+                    Ok(#original_ident {
+                        #(#into_original_fields),*
+                    })
                 }
             }
         }
+    } else {
+        quote! {
+            #(#struct_attrs)*
+            #derive_output
+            pub struct #wrapped_ident #ty_generics #where_clause {
+                #(#fields),*
+            }
 
-        impl #impl_generics From<#wrapped_ident #ty_generics> for #original_ident #ty_generics #try_from_where_clause {
-            fn from(from: #wrapped_ident #ty_generics) -> Self {
-                Self {
-                    #(#from_fields),*
+
+
+            impl #impl_generics From<#original_ident #ty_generics> for #wrapped_ident #ty_generics #where_clause {
+                fn from(from: #original_ident #ty_generics) -> Self {
+                    Self {
+                        #(#to_wrapped_fields),*
+                    }
                 }
             }
-        }
 
-        impl #impl_generics ::#lib_path::Wrapped for #original_ident #ty_generics #where_clause {
-            type Wrapped = #wrapped_ident #ty_generics;
-        }
+            impl #impl_generics ::#lib_path::Wrapped for #original_ident #ty_generics #where_clause {
+                type Wrapped = #wrapped_ident #ty_generics;
+            }
 
-        impl #impl_generics #wrapped_ident #ty_generics #where_clause {
-            pub fn try_from(from: #wrapped_ident #ty_generics) -> Result<#original_ident #ty_generics, ::#lib_path::UnwrappedError> {
-                Ok(#original_ident {
-                    #(#try_from_fields),*
-                })
+            impl #impl_generics #wrapped_ident #ty_generics #where_clause {
+                pub fn try_from(from: #wrapped_ident #ty_generics) -> Result<#original_ident #ty_generics, ::#lib_path::UnwrappedError> {
+                    Ok(#original_ident {
+                        #(#try_from_fields),*
+                    })
+                }
             }
         }
     }
