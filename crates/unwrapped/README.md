@@ -4,7 +4,11 @@
 
 # Unwrapped
 
-Creates a new struct, changing each field `Option<T> -> T`
+Generate struct variants with different optionality semantics.
+
+## Unwrapped
+
+Creates a new struct, changing each field `Option<T> -> T`.
 
 ```rs
 #[derive(Unwrapped)]
@@ -22,66 +26,202 @@ pub struct Ab {
 pub struct AbUw {
   a : Ab,
   b : u8,
-  c : Option<String>,
+  // c is not included - skip removes the field entirely
 }
 ```
 
-## Conversions
+Fields marked with `#[unwrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, `From` trait implementations are not generated (since conversion is impossible without all fields).
 
-### Defaulting
+### Conversions
 
-Uses `unwrap_or_default()` on `Option` fields, which requires the field's `T` to implement `Default`.
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
+
+- `Unwrapped::try_from(original)` is always generated. It returns `Err(UnwrappedError)` if any non-skipped `Option` field is `None`.
+- `From<Unwrapped> for Original` is generated only when no fields are skipped.
+- With skipped fields, use `into_original(self, skipped...)` to reconstruct the original type.
+
+### Converting Back with Skipped Fields
+
+When fields are skipped, an `into_original` helper method is generated that allows you to reconstruct the original struct by providing values for the skipped fields:
 
 ```rust
 use unwrapped::Unwrapped;
 
 #[derive(Debug, PartialEq, Unwrapped)]
-struct WithDefaults {
-    val1: Option<i32>,       // i32::default() is 0
-    val2: Option<String>,    // String::default() is ""
-    val3: String,            // Not an Option, so it's unchanged
-    val4: Option<Vec<u8>>,   // Vec::default() is an empty vector
+#[unwrapped(name = UserFormUw)]
+struct UserForm {
+    name: Option<String>,
+    email: Option<String>,
+    #[unwrapped(skip)]
+    created_at: i64,
+    #[unwrapped(skip)]
+    id: u64,
 }
 
-let original = WithDefaults {
-    val1: None,
-    val2: Some("hello".to_string()),
-    val3: "world".to_string(),
-    val4: None,
+// Create an unwrapped struct (without skipped fields)
+let form = UserFormUw {
+    name: "Alice".to_string(),
+    email: "alice@example.com".to_string(),
 };
 
-let unwrapped: WithDefaultsUw = original.into();
+// Convert back to original using into_original, providing skipped fields
+let original = form.into_original(1234567890, 42);
 
-assert_eq!(unwrapped.val1, 0);
-assert_eq!(unwrapped.val2, "hello".to_string());
-assert_eq!(unwrapped.val3, "world".to_string());
-assert_eq!(unwrapped.val4, Vec::<u8>::new());
+assert_eq!(original.name, Some("Alice".to_string()));
+assert_eq!(original.email, Some("alice@example.com".to_string()));
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.id, 42);
 ```
 
-### Fallible
+### Using `bon` Builders (Optional)
+
+If the original struct uses `bon::Builder` (via `#[derive(bon::Builder)]` or `#[builder(...)]`) and you also use `skip`, the macro adds a helper on the builder:
+
+- `from_unwrapped(self, uw)` pre-fills the builder with the non-skipped fields.
 
 ```rust
-use unwrapped::{Unwrapped, UnwrappedError};
+use unwrapped::Unwrapped;
 
-#[derive(Debug, PartialEq, Unwrapped)]
-struct Simple {
-    field1: Option<i32>,
-    field2: String,
-    field3: Option<u64>,
+#[derive(Debug, PartialEq, Unwrapped, bon::Builder)]
+#[unwrapped(name = UserFormUw)]
+#[builder(on(Option<String>, into))]
+struct UserForm {
+    name: Option<String>,
+    email: Option<String>,
+    #[unwrapped(skip)]
+    created_at: i64,
+    #[unwrapped(skip)]
+    id: u64,
 }
 
-let original_fail = Simple {
-    field1: None,
-    field2: "world".to_string(),
-    field3: Some(200),
+let form = UserFormUw {
+    name: "Alice".to_string(),
+    email: "alice@example.com".to_string(),
 };
 
-let result = SimpleUw::try_from(original_fail);
-assert!(result.is_err());
-match result {
-    Err(e) => assert_eq!(e.field_name, "field1"),
-    Ok(_) => panic!("Expected error"),
+let original = UserForm::builder()
+    .from_unwrapped(form)
+    .created_at(1234567890)
+    .id(42)
+    .build();
+
+assert_eq!(original.name, Some("Alice".to_string()));
+assert_eq!(original.email, Some("alice@example.com".to_string()));
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.id, 42);
+```
+
+If you are not using `bon`, you can still destructure the unwrapped struct and pass fields manually.
+
+## Wrapped
+
+Creates a new struct, changing each field `T -> Option<T>`. This is the inverse of `Unwrapped`.
+
+```rs
+#[derive(Wrapped)]
+pub struct Config {
+  timeout: u64,
+  retries: i32,
+  #[wrapped(skip)]
+  name: String,
 }
+```
+
+->
+
+```rs
+pub struct ConfigW {
+  timeout: Option<u64>,
+  retries: Option<i32>,
+  // name is not included - skip removes the field entirely
+}
+```
+
+Fields marked with `#[wrapped(skip)]` are completely removed from the generated struct. When any field has `skip`, the `From` trait implementations are not generated (since conversion is impossible without all fields).
+
+### Conversions
+
+**Important: No panics, no defaults!** All conversions are explicit and fallible.
+
+- `From<Original> for Wrapped` is generated only when no fields are skipped.
+- `Wrapped::try_from(wrapped)` is generated only when no fields are skipped and returns `Err(UnwrappedError)` if any required wrapped field is `None`.
+- With skipped fields, use `into_original(self, skipped...) -> Result<Original, UnwrappedError>`.
+
+### Converting Back with Skipped Fields
+
+When fields are skipped, an `into_original` helper method is generated that allows you to reconstruct the original struct by providing values for the skipped fields:
+
+```rust
+use unwrapped::Wrapped;
+
+#[derive(Debug, PartialEq, Wrapped)]
+#[wrapped(name = ConfigW)]
+struct Config {
+    timeout: u64,
+    retries: i32,
+    #[wrapped(skip)]
+    created_at: i64,
+    #[wrapped(skip)]
+    version: String,
+}
+
+// Create a wrapped struct (without skipped fields)
+let wrapped = ConfigW {
+    timeout: Some(30),
+    retries: Some(3),
+};
+
+// Convert back to original using into_original, providing skipped fields
+let original = wrapped
+    .into_original(1234567890, "v1.0".to_string())
+    .unwrap();
+
+assert_eq!(original.timeout, 30);
+assert_eq!(original.retries, 3);
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.version, "v1.0".to_string());
+```
+
+### Using `bon` Builders (Optional)
+
+If the original struct uses `bon::Builder` (via `#[derive(bon::Builder)]` or `#[builder(...)]`) and you also use `skip`, the macro adds a helper on the builder:
+
+- `from_wrapped(self, w)` pre-fills the builder and returns `Result<Builder, UnwrappedError>`.
+
+```rust
+use unwrapped::Wrapped;
+
+#[derive(Debug, PartialEq, Wrapped, bon::Builder)]
+#[wrapped(name = UserFormW)]
+#[builder(on(Option<String>, into))]
+struct UserForm {
+    name: String,
+    email: String,
+    note: Option<String>,
+    #[wrapped(skip)]
+    created_at: i64,
+    #[wrapped(skip)]
+    id: u64,
+}
+
+let wrapped = UserFormW {
+    name: Some("Alice".to_string()),
+    email: Some("alice@example.com".to_string()),
+    note: Some("hello".to_string()),
+};
+
+let original = UserForm::builder()
+    .from_wrapped(wrapped)
+    .unwrap()
+    .created_at(1234567890)
+    .id(42)
+    .build();
+
+assert_eq!(original.name, "Alice".to_string());
+assert_eq!(original.email, "alice@example.com".to_string());
+assert_eq!(original.note, Some("hello".to_string()));
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.id, 42);
 ```
 
 ## Customizing the Generated Struct Name
@@ -119,82 +259,6 @@ struct User3;
 #[allow(dead_code)]
 type S3 = BadUser3Something;
 ```
-
-# Wrapped
-
-Creates a new struct, changing each field `T -> Option<T>`. This is the inverse of `Unwrapped`.
-
-```rs
-#[derive(Wrapped)]
-pub struct Config {
-  timeout: u64,
-  retries: i32,
-  #[wrapped(skip)]
-  name: String,
-}
-```
-
-->
-
-```rs
-pub struct ConfigW {
-  timeout: Option<u64>,
-  retries: Option<i32>,
-  name: String,
-}
-```
-
-## Conversions
-
-### Defaulting
-
-Uses `unwrap_or_default()` on `Option` fields when converting back to the original struct.
-
-```rust
-use unwrapped::Wrapped;
-
-#[derive(Debug, PartialEq, Wrapped)]
-struct Config {
-    timeout: u64,
-    retries: i32,
-}
-
-let wrapped = ConfigW {
-    timeout: Some(30),
-    retries: None,
-};
-
-let config: Config = wrapped.into();
-
-assert_eq!(config.timeout, 30);
-assert_eq!(config.retries, 0);  // Default i32
-```
-
-### Fallible
-
-```rust
-use unwrapped::{Wrapped, UnwrappedError};
-
-#[derive(Debug, PartialEq, Wrapped)]
-struct Config {
-    timeout: u64,
-    retries: i32,
-}
-
-let wrapped_missing = ConfigW {
-    timeout: Some(30),
-    retries: None,
-};
-
-let result: Result<Config, UnwrappedError> = ConfigW::try_from(wrapped_missing);
-assert!(result.is_err());
-match result {
-    Err(e) => assert_eq!(e.field_name, "retries"),
-    Ok(_) => panic!("Expected error"),
-}
-```
-
-## Customizing the Generated Struct Name
 
 You can specify a custom name for the generated struct using the `wrapped` attribute.
 

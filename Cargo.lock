@@ -169,6 +169,7 @@ checksum = "9312f7c4f6ff9069b165498234ce8be658059c6728633667c526e27dc2cf1df5"
 name = "unwrapped"
 version = "0.2.1"
 dependencies = [
+ "bon",
  "unwrapped-derive",
 ]
 
@@ -178,6 +179,7 @@ version = "0.2.1"
 dependencies = [
  "bon",
  "darling 0.23.0",
+ "ident_case",
  "proc-macro2",
  "quote",
  "syn",

@@ -12,6 +12,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+bon = { workspace = true }
 unwrapped-derive = { optional = true, workspace = true }
 
 [features]

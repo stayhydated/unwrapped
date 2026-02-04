@@ -2,19 +2,19 @@ use std::collections::HashMap;
 
 use bon::Builder;
 use darling::{FromDeriveInput, FromField};
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::DeriveInput;
 
 use crate::utils::{
-    CommonOpts, FieldProcOpts, ProcUsageOpts, build_derive_output, collect_field_attrs,
-    get_struct_data,
+    CommonOpts, FieldProcOpts, ProcUsageOpts, bon_builder_info, build_derive_output,
+    collect_field_attrs, generic_args, get_struct_data, raw_ident_name, snake_to_pascal_ident,
+    unique_state_ident,
 };
 
 #[derive(Clone, Debug, Default, FromField)]
 #[darling(default, attributes(unwrapped))]
 struct FieldOpts {
     skip: bool,
-    default: Option<syn::Expr>, // Parse custom default expression
 }
 
 #[derive(Builder, Clone, Debug, FromDeriveInput)]
@@ -94,7 +94,6 @@ impl Opts {
 pub struct UnwrappedFieldProcOpts {
     pub unwrap: bool,
     pub attrs: Vec<proc_macro2::TokenStream>,
-    pub default_expr: Option<proc_macro2::TokenStream>,
 }
 
 impl UnwrappedFieldProcOpts {
@@ -102,18 +101,11 @@ impl UnwrappedFieldProcOpts {
         Self {
             unwrap,
             attrs: Vec::new(),
-            default_expr: None,
         }
     }
 
     pub fn with_attr(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
         self.attrs.push(tokens.into());
-        self
-    }
-
-    /// Set custom default expression
-    pub fn with_default(mut self, tokens: impl Into<proc_macro2::TokenStream>) -> Self {
-        self.default_expr = Some(tokens.into());
         self
     }
 }
@@ -178,7 +170,6 @@ impl UnwrappedProcUsageOpts {
                 FieldProcOpts {
                     transform: opts.unwrap,
                     attrs: opts.attrs.clone(),
-                    default_expr: opts.default_expr.clone(),
                 },
             );
         }
@@ -207,8 +198,20 @@ pub fn unwrapped(
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let s = get_struct_data(input);
 
-    let fields = s.fields.iter().map(|f| {
+    // Check if any field has skip attribute
+    let has_skipped_fields = s.fields.iter().any(|f| {
         let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+        field_opts.skip
+    });
+
+    let fields = s.fields.iter().filter_map(|f| {
+        let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field entirely if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
+
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
@@ -219,7 +222,6 @@ pub fn unwrapped(
         if let syn::Type::Path(p) = ty
             && let Some(seg) = p.path.segments.last()
             && seg.ident == "Option"
-            && !field_opts.skip
             && *proc_usage_opts
                 .fields_to_unwrap
                 .get(&name_str)
@@ -227,13 +229,19 @@ pub fn unwrapped(
             && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
             && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
         {
-            return quote! { #(#field_attrs)* pub #name: #inner_ty };
+            return Some(quote! { #(#field_attrs)* pub #name: #inner_ty });
         }
-        quote! { #(#field_attrs)* pub #name: #ty }
+        Some(quote! { #(#field_attrs)* pub #name: #ty })
     });
 
-    let from_fields = s.fields.iter().map(|f| {
+    let from_fields = s.fields.iter().filter_map(|f| {
         let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
+
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
@@ -241,19 +249,24 @@ pub fn unwrapped(
         if let syn::Type::Path(p) = ty
             && let Some(seg) = p.path.segments.last()
             && seg.ident == "Option"
-            && !field_opts.skip
             && *proc_usage_opts
                 .fields_to_unwrap
                 .get(&name_str)
                 .unwrap_or(&true)
         {
-            return quote! { #name: Some(from.#name) };
+            return Some(quote! { #name: Some(from.#name) });
         }
-        quote! { #name: from.#name }
+        Some(quote! { #name: from.#name })
     });
 
-    let try_from_fields = s.fields.iter().map(|f| {
+    let try_from_fields = s.fields.iter().filter_map(|f| {
         let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+
+        // Skip this field if skip attribute is present
+        if field_opts.skip {
+            return None;
+        }
+
         let name = &f.ident;
         let ty = &f.ty;
         let name_str = name.as_ref().unwrap().to_string();
@@ -261,108 +274,215 @@ pub fn unwrapped(
         if let syn::Type::Path(p) = ty
             && let Some(seg) = p.path.segments.last()
             && seg.ident == "Option"
-            && !field_opts.skip
             && *proc_usage_opts.fields_to_unwrap.get(&name_str).unwrap_or(&true)
         {
             let field_name_str = name.as_ref().unwrap().to_string();
-            return quote! { #name: from.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? };
+            return Some(quote! { #name: from.#name.ok_or(::#lib_path::UnwrappedError{ field_name: #field_name_str })? });
         }
-        quote! { #name: from.#name }
+        Some(quote! { #name: from.#name })
     });
-
-    let from_defaults_fields = s.fields.iter().map(|f| {
-        let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
-        let name = &f.ident;
-        let ty = &f.ty;
-        let name_str = name.as_ref().unwrap().to_string();
-
-        if let syn::Type::Path(p) = ty
-            && let Some(seg) = p.path.segments.last()
-            && seg.ident == "Option"
-            && !field_opts.skip
-            && *proc_usage_opts
-                .fields_to_unwrap
-                .get(&name_str)
-                .unwrap_or(&true)
-        {
-            // Priority-based default resolution:
-            // 1. Check programmatic defaults (highest priority)
-            // 2. Check attribute-based defaults
-            // 3. Fall back to unwrap_or_default()
-            let default_expr = proc_usage_opts
-                .field_opts
-                .get(&name_str)
-                .and_then(|o| o.default_expr.clone())
-                .or_else(|| field_opts.default.as_ref().map(|e| quote! { #e }));
-
-            return match default_expr {
-                Some(expr) => quote! { #name: from.#name.unwrap_or(#expr) },
-                None => quote! { #name: from.#name.unwrap_or_default() },
-            };
-        }
-        quote! { #name: from.#name }
-    });
-
-    let mut from_defaults_where_clause = where_clause.cloned();
-    let new_predicates: Vec<syn::WherePredicate> = s
-        .fields
-        .iter()
-        .filter_map(|f| {
-            let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
-            if let syn::Type::Path(p) = &f.ty
-                && let Some(seg) = p.path.segments.last()
-                && seg.ident == "Option"
-                && !field_opts.skip
-                && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
-                && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
-            {
-                return Some(syn::parse_quote!(#inner_ty: ::core::default::Default));
-            }
-            None
-        })
-        .collect();
-
-    if !new_predicates.is_empty() {
-        let wc = from_defaults_where_clause.get_or_insert_with(|| syn::parse_quote!(where));
-        wc.predicates.extend(new_predicates);
-    }
 
     // Build struct-level attributes and derives
     let struct_attrs = &opts.struct_attrs;
     let derive_output = build_derive_output(&opts.struct_derives);
 
-    quote! {
-        #(#struct_attrs)*
-        #derive_output
-        pub struct #unwrapped_ident #ty_generics #where_clause {
-            #(#fields),*
-        }
+    // Only generate From implementations if there are no skipped fields
+    if has_skipped_fields {
+        // Collect skipped fields for into_original method
+        let skipped_params = s.fields.iter().filter_map(|f| {
+            let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+            if field_opts.skip {
+                let name = &f.ident;
+                let ty = &f.ty;
+                Some(quote! { #name: #ty })
+            } else {
+                None
+            }
+        });
 
-        impl #impl_generics From<#original_ident #ty_generics> for #unwrapped_ident #ty_generics #from_defaults_where_clause {
-            fn from(from: #original_ident #ty_generics) -> Self {
-                Self {
-                    #(#from_defaults_fields),*
+        // Build field assignments for into_original
+        let into_original_fields = s.fields.iter().map(|f| {
+            let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+            let name = &f.ident;
+            let ty = &f.ty;
+            let name_str = name.as_ref().unwrap().to_string();
+
+            if field_opts.skip {
+                // Skipped fields come from parameters
+                quote! { #name }
+            } else if let syn::Type::Path(p) = ty
+                && let Some(seg) = p.path.segments.last()
+                && seg.ident == "Option"
+                && *proc_usage_opts
+                    .fields_to_unwrap
+                    .get(&name_str)
+                    .unwrap_or(&true)
+            {
+                // Non-skipped Option fields that were unwrapped -> wrap them back
+                quote! { #name: Some(self.#name) }
+            } else {
+                // Non-skipped non-Option fields
+                quote! { #name: self.#name }
+            }
+        });
+
+        let builder_helper = if let Some(builder_info) = bon_builder_info(input) {
+            let builder_ident = &builder_info.builder_ident;
+            let state_mod_ident = &builder_info.state_mod_ident;
+            let state_ident = unique_state_ident(&input.generics);
+
+            let mut builder_generics = input.generics.clone();
+            builder_generics
+                .params
+                .push(syn::parse_quote!(#state_ident));
+            builder_generics
+                .make_where_clause()
+                .predicates
+                .push(syn::parse_quote!(#state_ident: #state_mod_ident::State));
+            let (builder_impl_generics, builder_ty_generics, builder_where_clause) =
+                builder_generics.split_for_impl();
+
+            let orig_ty_args = generic_args(&input.generics);
+
+            let mut setter_calls = Vec::new();
+            let mut set_idents = Vec::new();
+            let mut state_bounds = Vec::new();
+
+            for f in s.fields.iter() {
+                let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+                if field_opts.skip {
+                    continue;
+                }
+
+                let name = f.ident.as_ref().expect("Expected named field");
+                let ty = &f.ty;
+                let name_str = name.to_string();
+
+                let (setter_ident, value) = if let syn::Type::Path(p) = ty
+                    && let Some(seg) = p.path.segments.last()
+                    && seg.ident == "Option"
+                {
+                    let should_unwrap = *proc_usage_opts
+                        .fields_to_unwrap
+                        .get(&name_str)
+                        .unwrap_or(&true);
+                    if should_unwrap {
+                        (name.clone(), quote! { uw.#name })
+                    } else {
+                        let maybe_name = syn::Ident::new(
+                            &format!("maybe_{}", raw_ident_name(name)),
+                            name.span(),
+                        );
+                        (maybe_name, quote! { uw.#name })
+                    }
+                } else {
+                    (name.clone(), quote! { uw.#name })
+                };
+
+                setter_calls.push(quote! { .#setter_ident(#value) });
+
+                let field_pascal = snake_to_pascal_ident(name);
+                let set_ident = format_ident!("Set{}", field_pascal);
+                set_idents.push(set_ident);
+                state_bounds
+                    .push(quote! { #state_ident::#field_pascal: #state_mod_ident::IsUnset });
+            }
+
+            let state_chain = set_idents.iter().fold(
+                quote! { #state_ident },
+                |state, set_ident| quote! { #state_mod_ident::#set_ident<#state> },
+            );
+
+            let builder_return_ty = if orig_ty_args.is_empty() {
+                quote! { #builder_ident <#state_chain> }
+            } else {
+                quote! { #builder_ident <#(#orig_ty_args,)* #state_chain> }
+            };
+
+            let method_where = if state_bounds.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#state_bounds,)* }
+            };
+
+            quote! {
+                impl #builder_impl_generics #builder_ident #builder_ty_generics #builder_where_clause {
+                    /// Pre-fill the builder with the non-skipped fields from the unwrapped struct.
+                    pub fn from_unwrapped(self, uw: #unwrapped_ident #ty_generics) -> #builder_return_ty
+                    #method_where
+                    {
+                        self #(#setter_calls)*
+                    }
                 }
             }
-        }
+        } else {
+            quote! {}
+        };
 
-        impl #impl_generics From<#unwrapped_ident #ty_generics> for #original_ident #ty_generics #where_clause {
-            fn from(from: #unwrapped_ident #ty_generics) -> Self {
-                Self {
-                    #(#from_fields),*
+        quote! {
+            #(#struct_attrs)*
+            #derive_output
+            pub struct #unwrapped_ident #ty_generics #where_clause {
+                #(#fields),*
+            }
+
+            impl #impl_generics ::#lib_path::Unwrapped for #original_ident #ty_generics #where_clause {
+                type Unwrapped = #unwrapped_ident #ty_generics;
+            }
+
+            impl #impl_generics #unwrapped_ident #ty_generics #where_clause {
+                pub fn try_from(from: #original_ident #ty_generics) -> Result<Self, ::#lib_path::UnwrappedError> {
+                    Ok(Self {
+                        #(#try_from_fields),*
+                    })
+                }
+
+                /// Convert back to the original struct by providing values for skipped fields.
+                ///
+                /// This method takes the skipped fields as parameters and reconstructs
+                /// the original struct with non-skipped fields from `self`.
+                ///
+                /// # Example
+                ///
+                /// ```ignore
+                /// let form = UserFormUw { name: "Alice".to_string(), email: "alice@example.com".to_string() };
+                /// let original = form.into_original(1234567890, 42);
+                /// ```
+                pub fn into_original(self, #(#skipped_params),*) -> #original_ident #ty_generics {
+                    #original_ident {
+                        #(#into_original_fields),*
+                    }
                 }
             }
-        }
 
-        impl #impl_generics ::#lib_path::Unwrapped for #original_ident #ty_generics #where_clause {
-            type Unwrapped = #unwrapped_ident #ty_generics;
+            #builder_helper
         }
+    } else {
+        quote! {
+            #(#struct_attrs)*
+            #derive_output
+            pub struct #unwrapped_ident #ty_generics #where_clause {
+                #(#fields),*
+            }
 
-        impl #impl_generics #unwrapped_ident #ty_generics #where_clause {
-            pub fn try_from(from: #original_ident #ty_generics) -> Result<Self, ::#lib_path::UnwrappedError> {
-                Ok(Self {
-                    #(#try_from_fields),*
-                })
+            impl #impl_generics From<#unwrapped_ident #ty_generics> for #original_ident #ty_generics #where_clause {
+                fn from(from: #unwrapped_ident #ty_generics) -> Self {
+                    Self {
+                        #(#from_fields),*
+                    }
+                }
+            }
+
+            impl #impl_generics ::#lib_path::Unwrapped for #original_ident #ty_generics #where_clause {
+                type Unwrapped = #unwrapped_ident #ty_generics;
+            }
+
+            impl #impl_generics #unwrapped_ident #ty_generics #where_clause {
+                pub fn try_from(from: #original_ident #ty_generics) -> Result<Self, ::#lib_path::UnwrappedError> {
+                    Ok(Self {
+                        #(#try_from_fields),*
+                    })
+                }
             }
         }
     }

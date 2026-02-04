@@ -1,36 +1,37 @@
 use unwrapped::{Unwrapped, Wrapped};
 
 #[test]
-fn test_unwrapped_from_defaults() {
+fn test_unwrapped_from_no_defaults() {
     #[derive(Debug, PartialEq, Unwrapped)]
-    struct WithDefaults {
+    struct WithValues {
         val1: Option<i32>,
         val2: Option<String>,
         val3: String,
         val4: Option<Vec<u8>>,
     }
 
-    let original = WithDefaults {
-        val1: None,
+    // From now requires all Option fields to be Some (no defaults!)
+    let original = WithValues {
+        val1: Some(42),
         val2: Some("hello".to_string()),
         val3: "world".to_string(),
-        val4: None,
+        val4: Some(vec![1, 2, 3]),
     };
 
-    let unwrapped: WithDefaultsUw = original.into();
-    assert_eq!(unwrapped.val1, 0);
+    let unwrapped = WithValuesUw::try_from(original).unwrap();
+    assert_eq!(unwrapped.val1, 42);
     assert_eq!(unwrapped.val2, "hello".to_string());
     assert_eq!(unwrapped.val3, "world".to_string());
-    assert_eq!(unwrapped.val4, Vec::<u8>::new());
+    assert_eq!(unwrapped.val4, vec![1, 2, 3]);
 
-    let converted_back: WithDefaults = unwrapped.into();
+    let converted_back: WithValues = unwrapped.into();
     assert_eq!(
         converted_back,
-        WithDefaults {
-            val1: Some(0),
+        WithValues {
+            val1: Some(42),
             val2: Some("hello".to_string()),
             val3: "world".to_string(),
-            val4: Some(Vec::new()),
+            val4: Some(vec![1, 2, 3]),
         }
     );
 }
@@ -83,6 +84,7 @@ fn test_unwrapped_simple_struct() {
 fn test_unwrapped_with_custom_name() {
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = "A", name = UserUnwrapped, suffix = c)]
+    #[allow(dead_code)]
     struct User0;
 
     #[allow(dead_code)]
@@ -90,6 +92,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = Bad)]
+    #[allow(dead_code)]
     struct User1;
 
     #[allow(dead_code)]
@@ -97,6 +100,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(suffix = "Something")]
+    #[allow(dead_code)]
     struct User2;
 
     #[allow(dead_code)]
@@ -104,6 +108,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = Bad, suffix = Something)]
+    #[allow(dead_code)]
     struct User3;
 
     #[allow(dead_code)]
@@ -173,64 +178,139 @@ fn test_skip_field() {
         field_c: bool,
     }
 
-    let original1 = Skipped {
-        field_a: Some(10),
-        field_b: None,
+    // With skip, field_b is removed from the generated struct
+    // SkippedUw only has field_a and field_c
+    let unwrapped = SkippedUw {
+        field_a: 10,
         field_c: true,
     };
-    let unwrapped1 = SkippedUw::from(original1);
-    assert_eq!(unwrapped1.field_a, 10);
-    assert_eq!(unwrapped1.field_b, None);
-    assert_eq!(unwrapped1.field_c, true);
+    assert_eq!(unwrapped.field_a, 10);
+    assert_eq!(unwrapped.field_c, true);
 
-    let original2 = Skipped {
-        field_a: None,
-        field_b: None,
+    // try_from converts Original -> Unwrapped, ignoring skipped fields
+    let original = Skipped {
+        field_a: Some(123),
+        field_b: Some("this will be ignored".to_string()),
         field_c: false,
     };
-    let unwrapped2 = SkippedUw::from(original2);
-    assert_eq!(unwrapped2.field_a, 0);
-    assert_eq!(unwrapped2.field_b, None);
+    let unwrapped2 = SkippedUw::try_from(original).unwrap();
+    assert_eq!(unwrapped2.field_a, 123);
     assert_eq!(unwrapped2.field_c, false);
 
-    let unwrapped3 = SkippedUw {
-        field_a: 99,
-        field_b: None,
-        field_c: true,
-    };
-    let original3 = Skipped::from(unwrapped3);
-    assert_eq!(
-        original3,
-        Skipped {
-            field_a: Some(99),
-            field_b: None,
-            field_c: true,
-        }
-    );
-
-    let original4 = Skipped {
-        field_a: Some(123),
-        field_b: None,
-        field_c: false,
-    };
-    let unwrapped4_res = SkippedUw::try_from(original4);
-    assert!(unwrapped4_res.is_ok());
-    let unwrapped4 = unwrapped4_res.unwrap();
-    assert_eq!(unwrapped4.field_a, 123);
-    assert_eq!(unwrapped4.field_b, None);
-    assert_eq!(unwrapped4.field_c, false);
-
-    let original5 = Skipped {
+    // try_from fails if non-skipped Option field is None (no defaults!)
+    let original_fail = Skipped {
         field_a: None,
-        field_b: Some("This should fail".to_string()),
+        field_b: Some("ignored".to_string()),
         field_c: true,
     };
-    let unwrapped5_res = SkippedUw::try_from(original5);
-    assert!(unwrapped5_res.is_err());
-    match unwrapped5_res {
+    let unwrapped_fail = SkippedUw::try_from(original_fail);
+    assert!(unwrapped_fail.is_err());
+    match unwrapped_fail {
         Err(e) => assert_eq!(e.field_name, "field_a"),
         Ok(_) => panic!("Expected error"),
     }
+
+    // Note: From<Skipped> for SkippedUw is NOT generated when skip is used
+    // because we can't convert between structs with different field counts.
+    // Only try_from() is available for one-way conversion.
+}
+
+#[test]
+fn test_skip_field_into_original() {
+    #[derive(Debug, PartialEq, Unwrapped)]
+    #[unwrapped(name = UserFormUw)]
+    struct UserForm {
+        name: Option<String>,
+        email: Option<String>,
+        #[unwrapped(skip)]
+        created_at: i64,
+        #[unwrapped(skip)]
+        id: u64,
+    }
+
+    // Create an unwrapped struct (without skipped fields)
+    let form = UserFormUw {
+        name: "Alice".to_string(),
+        email: "alice@example.com".to_string(),
+    };
+
+    // Convert back to original using into_original, providing skipped fields as parameters
+    let original = form.into_original(1234567890, 42);
+
+    assert_eq!(original.name, Some("Alice".to_string()));
+    assert_eq!(original.email, Some("alice@example.com".to_string()));
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.id, 42);
+
+    // Verify full round-trip works
+    let original2 = UserForm {
+        name: Some("Bob".to_string()),
+        email: Some("bob@example.com".to_string()),
+        created_at: 9999999999,
+        id: 100,
+    };
+
+    let unwrapped = UserFormUw::try_from(original2).unwrap();
+    assert_eq!(unwrapped.name, "Bob".to_string());
+    assert_eq!(unwrapped.email, "bob@example.com".to_string());
+
+    // Convert back with different skipped field values
+    let reconstructed = unwrapped.into_original(1111111111, 200);
+    assert_eq!(reconstructed.name, Some("Bob".to_string()));
+    assert_eq!(reconstructed.email, Some("bob@example.com".to_string()));
+    assert_eq!(reconstructed.created_at, 1111111111); // New value
+    assert_eq!(reconstructed.id, 200); // New value
+}
+
+#[test]
+fn test_skip_field_with_bon_builder_pattern() {
+    // This test demonstrates a partial builder helper using bon's typestate API
+    #[derive(bon::Builder, Debug, PartialEq, Unwrapped)]
+    #[unwrapped(name = UserFormUw)]
+    #[builder(on(Option<String>, into))]
+    struct UserForm {
+        name: Option<String>,
+        email: Option<String>,
+        #[unwrapped(skip)]
+        created_at: i64,
+        #[unwrapped(skip)]
+        id: u64,
+    }
+
+    // Create an unwrapped struct (without skipped fields)
+    let form = UserFormUw {
+        name: "Alice".to_string(),
+        email: "alice@example.com".to_string(),
+    };
+
+    // Use the macro-generated partial builder helper to pre-fill the non-skipped fields.
+    let original = UserForm::builder()
+        .from_unwrapped(form)
+        .created_at(1234567890)  // Skipped fields
+        .id(42)
+        .build();
+
+    assert_eq!(original.name, Some("Alice".to_string()));
+    assert_eq!(original.email, Some("alice@example.com".to_string()));
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.id, 42);
+
+    // The bon builder allows setting fields in any order
+    let form2 = UserFormUw {
+        name: "Bob".to_string(),
+        email: "bob@example.com".to_string(),
+    };
+
+    let original2 = UserForm::builder()
+        .id(999) // Set skipped fields first
+        .created_at(5555555555)
+        .from_unwrapped(form2) // Then non-skipped fields
+        .build();
+
+    assert_eq!(original2.name, Some("Bob".to_string()));
+    assert_eq!(original2.email, Some("bob@example.com".to_string()));
+    assert_eq!(original2.created_at, 5555555555);
+    assert_eq!(original2.id, 999);
 }
 
 // ==================== Wrapped Tests ====================
@@ -251,13 +331,13 @@ fn test_wrapped_simple_struct() {
     };
 
     // Convert to wrapped - non-Option fields become Option
-    let wrapped: SimpleW = original.into();
+    let wrapped = SimpleW::from(original);
     assert_eq!(wrapped.field1, Some(10));
     assert_eq!(wrapped.field2, Some("hello".to_string()));
     assert_eq!(wrapped.field3, Some(100)); // Already Option, stays as-is
 
-    // Convert back - unwrap with defaults
-    let converted_back: Simple = wrapped.into();
+    // Convert back
+    let converted_back: Simple = SimpleW::try_from(wrapped).unwrap();
     assert_eq!(converted_back.field1, 10);
     assert_eq!(converted_back.field2, "hello".to_string());
     assert_eq!(converted_back.field3, Some(100));
@@ -272,13 +352,13 @@ fn test_wrapped_with_none_values() {
     }
 
     let wrapped = WithOptionalsW {
-        required: None,
+        required: Some(42),
         optional: Some("value".to_string()),
     };
 
-    // Conversion from wrapped with None uses default
-    let converted: WithOptionals = wrapped.into();
-    assert_eq!(converted.required, 0); // Default i32
+    // Conversion from wrapped requires all fields to be Some (no defaults!)
+    let converted: WithOptionals = WithOptionalsW::try_from(wrapped).unwrap();
+    assert_eq!(converted.required, 42);
     assert_eq!(converted.optional, "value".to_string());
 }
 
@@ -330,11 +410,11 @@ fn test_wrapped_with_generics() {
         id: 123,
     };
 
-    let wrapped: GenericW<bool> = original.into();
+    let wrapped = GenericW::from(original);
     assert_eq!(wrapped.value, Some(true));
     assert_eq!(wrapped.id, Some(123));
 
-    let converted_back: Generic<bool> = wrapped.into();
+    let converted_back: Generic<bool> = GenericW::try_from(wrapped).unwrap();
     assert_eq!(converted_back.value, true);
     assert_eq!(converted_back.id, 123);
 }
@@ -356,6 +436,7 @@ fn test_wrapped_trait() {
 fn test_wrapped_skip_field() {
     #[derive(Debug, PartialEq, Wrapped)]
     #[wrapped(name = SkippedW)]
+    #[allow(dead_code)]
     struct Skipped {
         field_a: u32,
         #[wrapped(skip)]
@@ -363,21 +444,25 @@ fn test_wrapped_skip_field() {
         field_c: bool,
     }
 
-    let original = Skipped {
-        field_a: 10,
-        field_b: None,
-        field_c: true,
+    // With skip, field_b is removed from the generated struct
+    // SkippedW only has field_a and field_c wrapped in Option
+    let wrapped = SkippedW {
+        field_a: Some(10),
+        field_c: Some(true),
     };
-
-    let wrapped = SkippedW::from(original);
     assert_eq!(wrapped.field_a, Some(10));
-    assert_eq!(wrapped.field_b, None); // Skipped, stays as-is
     assert_eq!(wrapped.field_c, Some(true));
 
-    let converted_back: Skipped = wrapped.into();
-    assert_eq!(converted_back.field_a, 10);
-    assert_eq!(converted_back.field_b, None);
-    assert_eq!(converted_back.field_c, true);
+    // Verify we can construct with None values too
+    let wrapped2 = SkippedW {
+        field_a: Some(20),
+        field_c: None,
+    };
+    assert_eq!(wrapped2.field_a, Some(20));
+    assert_eq!(wrapped2.field_c, None);
+
+    // Note: From implementations are NOT generated when skip is used
+    // because we can't convert between structs with different field counts.
 }
 
 #[test]
@@ -409,4 +494,106 @@ fn test_wrapped_with_custom_name() {
 
     #[allow(dead_code)]
     type Works3 = BadUser3Something;
+}
+
+#[test]
+fn test_wrapped_skip_field_into_original() {
+    #[derive(Debug, PartialEq, Wrapped)]
+    #[wrapped(name = ConfigW)]
+    struct Config {
+        timeout: u64,
+        retries: i32,
+        #[wrapped(skip)]
+        created_at: i64,
+        #[wrapped(skip)]
+        version: String,
+    }
+
+    // Create a wrapped struct (without skipped fields)
+    let wrapped = ConfigW {
+        timeout: Some(30),
+        retries: Some(3),
+    };
+
+    // Convert back to original using into_original, providing skipped fields
+    let original = wrapped
+        .into_original(1234567890, "v1.0".to_string())
+        .unwrap();
+
+    assert_eq!(original.timeout, 30);
+    assert_eq!(original.retries, 3);
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.version, "v1.0".to_string());
+
+    // Test error case when wrapped field is None
+    let wrapped_none = ConfigW {
+        timeout: None,
+        retries: Some(5),
+    };
+
+    let result = wrapped_none.into_original(9999999999, "v2.0".to_string());
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err().field_name, "timeout");
+
+    // Test with manually constructed wrapped struct
+    let wrapped2 = ConfigW {
+        timeout: Some(60),
+        retries: Some(10),
+    };
+
+    // Convert back with skipped field values
+    let reconstructed = wrapped2
+        .into_original(2222222222, "v4.0".to_string())
+        .unwrap();
+    assert_eq!(reconstructed.timeout, 60);
+    assert_eq!(reconstructed.retries, 10);
+    assert_eq!(reconstructed.created_at, 2222222222);
+    assert_eq!(reconstructed.version, "v4.0".to_string());
+}
+
+#[test]
+fn test_wrapped_skip_field_with_bon_builder_pattern() {
+    #[derive(bon::Builder, Debug, PartialEq, Wrapped)]
+    #[wrapped(name = UserFormW)]
+    #[builder(on(Option<String>, into))]
+    struct UserForm {
+        name: String,
+        email: String,
+        note: Option<String>,
+        #[wrapped(skip)]
+        created_at: i64,
+        #[wrapped(skip)]
+        id: u64,
+    }
+
+    let wrapped = UserFormW {
+        name: Some("Alice".to_string()),
+        email: Some("alice@example.com".to_string()),
+        note: Some("hello".to_string()),
+    };
+
+    let original = UserForm::builder()
+        .from_wrapped(wrapped)
+        .unwrap()
+        .created_at(1234567890)
+        .id(42)
+        .build();
+
+    assert_eq!(original.name, "Alice".to_string());
+    assert_eq!(original.email, "alice@example.com".to_string());
+    assert_eq!(original.note, Some("hello".to_string()));
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.id, 42);
+
+    let wrapped_missing = UserFormW {
+        name: None,
+        email: Some("bob@example.com".to_string()),
+        note: None,
+    };
+
+    let err = UserForm::builder()
+        .from_wrapped(wrapped_missing)
+        .err()
+        .expect("expected error");
+    assert_eq!(err.field_name, "name");
 }
