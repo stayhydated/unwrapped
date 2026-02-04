@@ -230,7 +230,7 @@ fn test_skip_field_into_original() {
         email: "alice@example.com".to_string(),
     };
 
-    // Convert back to original using into_original, providing skipped fields
+    // Convert back to original using into_original, providing skipped fields as parameters
     let original = form.into_original(1234567890, 42);
 
     assert_eq!(original.name, Some("Alice".to_string()));
@@ -256,6 +256,57 @@ fn test_skip_field_into_original() {
     assert_eq!(reconstructed.email, Some("bob@example.com".to_string()));
     assert_eq!(reconstructed.created_at, 1111111111); // New value
     assert_eq!(reconstructed.id, 200); // New value
+}
+
+#[test]
+fn test_skip_field_with_bon_builder_pattern() {
+    // This test demonstrates a partial builder helper using bon's typestate API
+    #[derive(Debug, PartialEq, Unwrapped, bon::Builder)]
+    #[unwrapped(name = UserFormUw)]
+    #[builder(on(Option<String>, into))]
+    struct UserForm {
+        name: Option<String>,
+        email: Option<String>,
+        #[unwrapped(skip)]
+        created_at: i64,
+        #[unwrapped(skip)]
+        id: u64,
+    }
+
+    // Create an unwrapped struct (without skipped fields)
+    let form = UserFormUw {
+        name: "Alice".to_string(),
+        email: "alice@example.com".to_string(),
+    };
+
+    // Use the macro-generated partial builder helper to pre-fill the non-skipped fields.
+    let original = UserForm::builder()
+        .from_unwrapped(form)
+        .created_at(1234567890)  // Skipped fields
+        .id(42)
+        .build();
+
+    assert_eq!(original.name, Some("Alice".to_string()));
+    assert_eq!(original.email, Some("alice@example.com".to_string()));
+    assert_eq!(original.created_at, 1234567890);
+    assert_eq!(original.id, 42);
+
+    // The bon builder allows setting fields in any order
+    let form2 = UserFormUw {
+        name: "Bob".to_string(),
+        email: "bob@example.com".to_string(),
+    };
+
+    let original2 = UserForm::builder()
+        .id(999) // Set skipped fields first
+        .created_at(5555555555)
+        .from_unwrapped(form2) // Then non-skipped fields
+        .build();
+
+    assert_eq!(original2.name, Some("Bob".to_string()));
+    assert_eq!(original2.email, Some("bob@example.com".to_string()));
+    assert_eq!(original2.created_at, 5555555555);
+    assert_eq!(original2.id, 999);
 }
 
 // ==================== Wrapped Tests ====================

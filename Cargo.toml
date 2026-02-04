@@ -1,5 +1,5 @@
 [workspace]
-members = [ "crates/unwrapped", "crates/unwrapped-derive" ]
+members = ["crates/unwrapped", "crates/unwrapped-derive"]
 resolver = "3"
 
 [workspace.package]
@@ -14,6 +14,7 @@ version = "0.2.1"
 [workspace.dependencies]
 bon = "3.8.1"
 darling = "0.23.0"
+ident_case = "1"
 proc-macro2 = "1.0.105"
 quote = "1.0.43"
 syn = "2.0.114"

@@ -61,6 +61,47 @@ assert_eq!(original.created_at, 1234567890);
 assert_eq!(original.id, 42);
 ```
 
+#### Partial Builder Pattern with `bon` (More Ergonomic)
+
+While we cannot directly return a partial `bon` builder due to Rust's type system limitations with bon's type-state pattern, you can achieve the same ergonomic result by destructuring the unwrapped struct inline:
+
+```rust
+use unwrapped::Unwrapped;
+
+#[derive(Debug, PartialEq, Unwrapped, bon::Builder)]
+#[unwrapped(name = UserFormUw)]
+#[builder(on(Option<String>, into))]
+struct UserForm {
+    name: Option<String>,
+    email: Option<String>,
+    #[unwrapped(skip)]
+    created_at: i64,
+    #[unwrapped(skip)]
+    id: u64,
+}
+
+let form = UserFormUw {
+    name: "Alice".to_string(),
+    email: "alice@example.com".to_string(),
+};
+
+// Destructure and use bon's builder - ergonomic with named parameters!
+let UserFormUw { name, email } = form;
+let original = UserForm::builder()
+    .name(name)                // Non-skipped fields
+    .email(email)              // bon's into conversion handles wrapping
+    .created_at(1234567890)    // Skipped fields
+    .id(42)                    // Can be in any order!
+    .build();
+
+assert_eq!(original.name, Some("Alice".to_string()));
+assert_eq!(original.email, Some("alice@example.com".to_string()));
+assert_eq!(original.created_at, 1234567890);
+assert_eq!(original.id, 42);
+```
+
+**Tip:** Use destructuring (`let UserFormUw { name, email } = form;`) to extract non-skipped fields, then pass them to the builder. This gives you the ergonomics of a partial builder!
+
 ## Conversions
 
 **Important: No panics, no defaults!** All conversions are explicit and fallible.
@@ -203,6 +244,10 @@ assert_eq!(original.version, "v1.0".to_string());
 ```
 
 Note: `into_original` returns a `Result` because wrapped fields might be `None`.
+
+#### Using with `bon` Builders
+
+Similar to `Unwrapped`, you can manually use `bon` builders with `Wrapped` structs for a more ergonomic API.
 
 ## Conversions
 

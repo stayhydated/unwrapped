@@ -1,9 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bon::Builder;
 use darling::{FromDeriveInput, FromField};
-use quote::quote;
-use syn::DeriveInput;
+use ident_case::RenameRule;
+use quote::{format_ident, quote};
+use syn::parse::Parser;
+use syn::{DeriveInput, Expr, GenericParam, Meta, Path};
 
 use crate::utils::{
     CommonOpts, FieldProcOpts, ProcUsageOpts, build_derive_output, collect_field_attrs,
@@ -191,6 +193,199 @@ impl UnwrappedProcUsageOpts {
     }
 }
 
+#[derive(Default)]
+struct BonBuilderConfig {
+    builder_type: Option<syn::Ident>,
+    state_mod: Option<syn::Ident>,
+}
+
+struct BonBuilderInfo {
+    builder_ident: syn::Ident,
+    state_mod_ident: syn::Ident,
+}
+
+fn derives_builder(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        if !attr.path().is_ident("derive") {
+            return false;
+        }
+        let paths = attr
+            .parse_args_with(syn::punctuated::Punctuated::<Path, syn::Token![,]>::parse_terminated);
+        let Ok(paths) = paths else {
+            return false;
+        };
+        paths.iter().any(|path| {
+            path.segments
+                .last()
+                .map(|seg| seg.ident == "Builder")
+                .unwrap_or(false)
+        })
+    })
+}
+
+fn has_builder_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| attr.path().is_ident("builder"))
+}
+
+fn parse_builder_config(attrs: &[syn::Attribute]) -> BonBuilderConfig {
+    let mut config = BonBuilderConfig::default();
+
+    for attr in attrs {
+        if !attr.path().is_ident("builder") {
+            continue;
+        }
+        let meta = match &attr.meta {
+            Meta::List(list) => list,
+            _ => continue,
+        };
+        let Some(nested) = parse_meta_list(meta.tokens.clone()) else {
+            continue;
+        };
+
+        for item in nested {
+            if let Some(ident) = parse_builder_item_ident(&item, "builder_type") {
+                config.builder_type = Some(ident);
+            }
+            if let Some(ident) = parse_builder_item_ident(&item, "state_mod") {
+                config.state_mod = Some(ident);
+            }
+        }
+    }
+
+    config
+}
+
+fn parse_builder_item_ident(item: &Meta, key: &str) -> Option<syn::Ident> {
+    match item {
+        Meta::NameValue(nv) if nv.path.is_ident(key) => parse_meta_value_ident(&nv.value),
+        Meta::List(list) if list.path.is_ident(key) => {
+            let nested = parse_meta_list(list.tokens.clone())?;
+            for inner in nested {
+                if let Meta::NameValue(nv) = inner
+                    && nv.path.is_ident("name")
+                    && let Some(ident) = parse_meta_value_ident(&nv.value)
+                {
+                    return Some(ident);
+                }
+            }
+            None
+        },
+        _ => None,
+    }
+}
+
+fn parse_meta_list(
+    tokens: proc_macro2::TokenStream,
+) -> Option<syn::punctuated::Punctuated<Meta, syn::Token![,]>> {
+    let parser = syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated;
+    parser.parse2(tokens).ok()
+}
+
+fn parse_meta_value_ident(expr: &Expr) -> Option<syn::Ident> {
+    match expr {
+        Expr::Path(path) => path.path.segments.last().map(|seg| seg.ident.clone()),
+        Expr::Lit(lit) => {
+            if let syn::Lit::Str(lit_str) = &lit.lit {
+                syn::parse_str::<syn::Ident>(&lit_str.value()).ok()
+            } else {
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+fn bon_builder_info(input: &DeriveInput) -> Option<BonBuilderInfo> {
+    if !derives_builder(&input.attrs) && !has_builder_attr(&input.attrs) {
+        return None;
+    }
+
+    let config = parse_builder_config(&input.attrs);
+
+    let builder_ident = config
+        .builder_type
+        .unwrap_or_else(|| format_ident!("{}Builder", input.ident));
+
+    let state_mod_ident = config
+        .state_mod
+        .unwrap_or_else(|| pascal_to_snake_ident(&builder_ident));
+
+    Some(BonBuilderInfo {
+        builder_ident,
+        state_mod_ident,
+    })
+}
+
+fn raw_ident_name(ident: &syn::Ident) -> String {
+    ident
+        .to_string()
+        .strip_prefix("r#")
+        .unwrap_or(&ident.to_string())
+        .to_string()
+}
+
+fn pascal_to_snake_ident(ident: &syn::Ident) -> syn::Ident {
+    let renamed = RenameRule::SnakeCase.apply_to_variant(raw_ident_name(ident));
+    syn::Ident::new(&renamed, proc_macro2::Span::call_site())
+}
+
+fn snake_to_pascal_ident(ident: &syn::Ident) -> syn::Ident {
+    let renamed = RenameRule::PascalCase.apply_to_field(raw_ident_name(ident));
+    syn::Ident::new(&renamed, proc_macro2::Span::call_site())
+}
+
+fn unique_state_ident(generics: &syn::Generics) -> syn::Ident {
+    let mut existing = HashSet::new();
+    for param in generics.params.iter() {
+        match param {
+            GenericParam::Type(param) => {
+                existing.insert(param.ident.to_string());
+            },
+            GenericParam::Lifetime(param) => {
+                existing.insert(param.lifetime.ident.to_string());
+            },
+            GenericParam::Const(param) => {
+                existing.insert(param.ident.to_string());
+            },
+        }
+    }
+
+    let base = "__UnwrappedBuilderState";
+    if !existing.contains(base) {
+        return syn::Ident::new(base, proc_macro2::Span::call_site());
+    }
+
+    let mut i = 0;
+    loop {
+        let candidate = format!("{base}{i}");
+        if !existing.contains(&candidate) {
+            return syn::Ident::new(&candidate, proc_macro2::Span::call_site());
+        }
+        i += 1;
+    }
+}
+
+fn generic_args(generics: &syn::Generics) -> Vec<proc_macro2::TokenStream> {
+    generics
+        .params
+        .iter()
+        .map(|param| match param {
+            GenericParam::Type(param) => {
+                let ident = &param.ident;
+                quote! { #ident }
+            },
+            GenericParam::Lifetime(param) => {
+                let lifetime = &param.lifetime;
+                quote! { #lifetime }
+            },
+            GenericParam::Const(param) => {
+                let ident = &param.ident;
+                quote! { #ident }
+            },
+        })
+        .collect()
+}
+
 pub fn unwrapped(
     input: &DeriveInput,
     options: Option<Opts>,
@@ -335,6 +530,99 @@ pub fn unwrapped(
             }
         });
 
+        let builder_helper = if let Some(builder_info) = bon_builder_info(input) {
+            let builder_ident = &builder_info.builder_ident;
+            let state_mod_ident = &builder_info.state_mod_ident;
+            let state_ident = unique_state_ident(&input.generics);
+
+            let mut builder_generics = input.generics.clone();
+            builder_generics
+                .params
+                .push(syn::parse_quote!(#state_ident));
+            builder_generics
+                .make_where_clause()
+                .predicates
+                .push(syn::parse_quote!(#state_ident: #state_mod_ident::State));
+            let (builder_impl_generics, builder_ty_generics, builder_where_clause) =
+                builder_generics.split_for_impl();
+
+            let orig_ty_args = generic_args(&input.generics);
+
+            let mut setter_calls = Vec::new();
+            let mut set_idents = Vec::new();
+            let mut state_bounds = Vec::new();
+
+            for f in s.fields.iter() {
+                let field_opts = FieldOpts::from_field(f).expect("Wrong field options");
+                if field_opts.skip {
+                    continue;
+                }
+
+                let name = f.ident.as_ref().expect("Expected named field");
+                let ty = &f.ty;
+                let name_str = name.to_string();
+
+                let (setter_ident, value) = if let syn::Type::Path(p) = ty
+                    && let Some(seg) = p.path.segments.last()
+                    && seg.ident == "Option"
+                {
+                    let should_unwrap = *proc_usage_opts
+                        .fields_to_unwrap
+                        .get(&name_str)
+                        .unwrap_or(&true);
+                    if should_unwrap {
+                        (name.clone(), quote! { uw.#name })
+                    } else {
+                        let maybe_name = syn::Ident::new(
+                            &format!("maybe_{}", raw_ident_name(name)),
+                            name.span(),
+                        );
+                        (maybe_name, quote! { uw.#name })
+                    }
+                } else {
+                    (name.clone(), quote! { uw.#name })
+                };
+
+                setter_calls.push(quote! { .#setter_ident(#value) });
+
+                let field_pascal = snake_to_pascal_ident(name);
+                let set_ident = format_ident!("Set{}", field_pascal);
+                set_idents.push(set_ident);
+                state_bounds
+                    .push(quote! { #state_ident::#field_pascal: #state_mod_ident::IsUnset });
+            }
+
+            let state_chain = set_idents.iter().fold(
+                quote! { #state_ident },
+                |state, set_ident| quote! { #state_mod_ident::#set_ident<#state> },
+            );
+
+            let builder_return_ty = if orig_ty_args.is_empty() {
+                quote! { #builder_ident <#state_chain> }
+            } else {
+                quote! { #builder_ident <#(#orig_ty_args,)* #state_chain> }
+            };
+
+            let method_where = if state_bounds.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#state_bounds,)* }
+            };
+
+            quote! {
+                impl #builder_impl_generics #builder_ident #builder_ty_generics #builder_where_clause {
+                    /// Pre-fill the builder with the non-skipped fields from the unwrapped struct.
+                    pub fn from_unwrapped(self, uw: #unwrapped_ident #ty_generics) -> #builder_return_ty
+                    #method_where
+                    {
+                        self #(#setter_calls)*
+                    }
+                }
+            }
+        } else {
+            quote! {}
+        };
+
         quote! {
             #(#struct_attrs)*
             #derive_output
@@ -357,12 +645,21 @@ pub fn unwrapped(
                 ///
                 /// This method takes the skipped fields as parameters and reconstructs
                 /// the original struct with non-skipped fields from `self`.
+                ///
+                /// # Example
+                ///
+                /// ```ignore
+                /// let form = UserFormUw { name: "Alice".to_string(), email: "alice@example.com".to_string() };
+                /// let original = form.into_original(1234567890, 42);
+                /// ```
                 pub fn into_original(self, #(#skipped_params),*) -> #original_ident #ty_generics {
                     #original_ident {
                         #(#into_original_fields),*
                     }
                 }
             }
+
+            #builder_helper
         }
     } else {
         quote! {
