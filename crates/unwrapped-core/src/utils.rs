@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use ident_case::RenameRule;
 use quote::{format_ident, quote};
-use syn::parse::Parser;
+use syn::parse::Parser as _;
 use syn::{DeriveInput, Expr, GenericParam, Meta, Path};
 
 /// Check if a type is `Option<T>` and return the inner type if so

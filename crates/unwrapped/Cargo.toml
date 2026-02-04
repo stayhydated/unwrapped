@@ -16,5 +16,5 @@ bon = { workspace = true }
 unwrapped-derive = { optional = true, workspace = true }
 
 [features]
-default = ["derive"]
-derive = ["dep:unwrapped-derive"]
+default = [ "derive" ]
+derive = [ "dep:unwrapped-derive" ]

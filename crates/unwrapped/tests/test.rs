@@ -84,6 +84,7 @@ fn test_unwrapped_simple_struct() {
 fn test_unwrapped_with_custom_name() {
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = "A", name = UserUnwrapped, suffix = c)]
+    #[allow(dead_code)]
     struct User0;
 
     #[allow(dead_code)]
@@ -91,6 +92,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = Bad)]
+    #[allow(dead_code)]
     struct User1;
 
     #[allow(dead_code)]
@@ -98,6 +100,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(suffix = "Something")]
+    #[allow(dead_code)]
     struct User2;
 
     #[allow(dead_code)]
@@ -105,6 +108,7 @@ fn test_unwrapped_with_custom_name() {
 
     #[derive(Debug, PartialEq, Unwrapped)]
     #[unwrapped(prefix = Bad, suffix = Something)]
+    #[allow(dead_code)]
     struct User3;
 
     #[allow(dead_code)]
@@ -261,7 +265,7 @@ fn test_skip_field_into_original() {
 #[test]
 fn test_skip_field_with_bon_builder_pattern() {
     // This test demonstrates a partial builder helper using bon's typestate API
-    #[derive(Debug, PartialEq, Unwrapped, bon::Builder)]
+    #[derive(bon::Builder, Debug, PartialEq, Unwrapped)]
     #[unwrapped(name = UserFormUw)]
     #[builder(on(Option<String>, into))]
     struct UserForm {
@@ -432,6 +436,7 @@ fn test_wrapped_trait() {
 fn test_wrapped_skip_field() {
     #[derive(Debug, PartialEq, Wrapped)]
     #[wrapped(name = SkippedW)]
+    #[allow(dead_code)]
     struct Skipped {
         field_a: u32,
         #[wrapped(skip)]
@@ -548,7 +553,7 @@ fn test_wrapped_skip_field_into_original() {
 
 #[test]
 fn test_wrapped_skip_field_with_bon_builder_pattern() {
-    #[derive(Debug, PartialEq, Wrapped, bon::Builder)]
+    #[derive(bon::Builder, Debug, PartialEq, Wrapped)]
     #[wrapped(name = UserFormW)]
     #[builder(on(Option<String>, into))]
     struct UserForm {

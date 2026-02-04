@@ -2,96 +2,96 @@
 
 ## Overview
 
-The `unwrapped-core` crate contains the reusable core logic for generating unwrapped structs. It has no proc-macro dependencies, making it usable by other macro authors who want to generate unwrapped variants as part of their own macros.
+The `unwrapped-core` crate contains reusable code generation logic for both `Unwrapped` and `Wrapped`. It has no proc-macro dependencies, making it usable by other macro authors who want to generate optionality variants as part of their own macros.
 
 ## Design
 
-The crate exposes a single entry point function `unwrapped()` that takes a parsed `DeriveInput` and configuration options, returning a `TokenStream` with the generated code.
+The crate is organized into three modules:
+
+- **`unwrapped`** - Generates `Option<T> -> T` variants and related impls
+- **`wrapped`** - Generates `T -> Option<T>` variants and related impls
+- **`utils`** - Shared helpers for naming, attribute collection, Option detection, and bon builder integration
 
 ### Key Components
 
-- **`Opts`** - Struct-level configuration parsed from `#[unwrapped(...)]` attributes
-
-  - `name` - Custom name for the generated struct
-  - `prefix` - Prefix to add to the struct name
-  - `suffix` - Suffix to add to the struct name
-  - Uses `bon` for builder pattern: `Opts::builder().suffix(ident).build()`
-
-- **`FieldOpts`** - Field-level configuration parsed from `#[unwrapped(...)]` attributes
-
-  - `skip` - When true, the field is completely removed from the unwrapped struct. If any field has `skip`, `From` implementations are not generated.
-
-- **`ProcUsageOpts`** - Runtime options for proc-macro authors
-
-  - `fields_to_unwrap` - Map of field names to unwrap behavior overrides
-  - `lib_holder_name` - Custom path for the `unwrapped` crate import
-
-- **`unwrapped()`** - Core function that generates the `TokenStream`
+- **`Opts` / `WrappedOpts`** - Struct-level configuration parsed from `#[unwrapped(...)]` / `#[wrapped(...)]` attributes, plus builder-only options for custom derives and attributes
+- **`UnwrappedProcUsageOpts` / `WrappedProcUsageOpts`** - Procedural options for macro authors, including per-field transform overrides, extra field attributes, and custom `unwrapped` crate paths
+- **`CommonOpts` / `ProcUsageOpts`** - Shared configuration types used by both generators
+- **`UnwrappedError`** - Used by fallible conversions when an `Option` field is `None`
 
 ## Code Generation
 
-Given an input struct, the function generates:
+Given an input struct, the generator:
 
-1. **Unwrapped struct** with the derives configured via `Opts`
-1. **`From<Unwrapped>` for Original** wrapping in `Some()`
-1. **`Unwrapped` trait impl** associating types
-1. **`try_from()` method** returning `UnwrappedError` on `None`
+1. Parses struct-level options and procedural usage options
+1. Iterates fields, applying `skip` and optional transforms
+1. Collects field attributes from static options and dynamic callbacks
+1. Generates the new struct definition
+1. Generates trait impls and conversion helpers
+
+### Transformation Rules
+
+- **Unwrapped**
+
+  - `Option<T>` becomes `T` when the field is selected for transformation
+  - Non-`Option<T>` fields are left unchanged
+
+- **Wrapped**
+
+  - Non-`Option<T>` fields become `Option<T>` when selected for transformation
+  - Existing `Option<T>` fields are left unchanged
+
+### Conversions
+
+- **Unwrapped**
+
+  - `try_from(original)` is always generated and fails if any non-skipped `Option` field is `None`
+  - `From<Unwrapped> for Original` is generated only when no fields are skipped
+  - With skipped fields, an `into_original(self, skipped...)` helper is generated
+
+- **Wrapped**
+
+  - `From<Original> for Wrapped` and `try_from(wrapped)` are generated only when no fields are skipped
+  - With skipped fields, an `into_original(self, skipped...) -> Result<Original, UnwrappedError>` helper is generated
+
+## Skip Field Behavior
+
+When a field has the `skip` attribute:
+
+- The field is removed from the generated struct
+- `From` implementations are omitted (field counts no longer match)
+- `into_original` helpers are generated to reconstruct the original type
+- If the input struct derives `bon::Builder` (or uses `#[builder(...)]`), the generator adds builder helpers:
+  - `from_unwrapped(self, uw)` for Unwrapped
+  - `from_wrapped(self, w)` for Wrapped (returns `Result`)
+
+## Naming Strategy
+
+The generated identifier is computed as:
+
+1. `prefix + (name or original) + suffix`
+1. If the result equals the original name, append the default suffix (`Uw` or `W`)
+
+## Where Clause Handling
+
+All impls preserve the original generics and where clause; no additional bounds are introduced.
 
 ## Data Flow
 
 ```mermaid
 graph TD
-    A[DeriveInput] --> B[Parse Opts from attributes]
-    A --> C[Iterate struct fields]
-    C --> D{Is Option<T>?}
-    D -->|Yes| E{skip = true?}
-    D -->|No| F[Keep original type]
-    E -->|Yes| R[Remove field entirely]
-    E -->|No| G[Extract inner T]
-    G --> H[Generate field as T]
-    F --> H
-    R --> H
-    H --> I[Generate struct definition]
-    H --> J[Generate From impls]
-    H --> K[Generate try_from method]
-    H --> L[Generate Unwrapped trait impl]
-    I --> M[Return TokenStream]
-    J --> M
-    K --> M
-    L --> M
+    A[DeriveInput] --> B[Parse opts + proc usage opts]
+    B --> C[Iterate struct fields]
+    C --> D{skip?}
+    D -->|Yes| E[Drop field]
+    D -->|No| F{Transform?}
+    F -->|Unwrapped: Option<T>| G[T]
+    F -->|Wrapped: non-Option| H[Option<T>]
+    F -->|No transform| I[Original type]
+    E --> J[Generate struct definition]
+    G --> J
+    H --> J
+    I --> J
+    J --> K[Generate impls + helpers]
+    K --> L[TokenStream]
 ```
-
-## Skip Field Behavior
-
-When a field has the `skip` attribute:
-- The field is completely removed from the generated struct
-- `From` trait implementations are **not generated** (bidirectional conversion is impossible without all fields)
-- `#[derive(bon::Builder)]` is automatically added to make construction easier
-- Only the struct definition, `Unwrapped` trait impl, and `try_from` method are generated
-
-This allows creating partial struct variants where certain fields are intentionally excluded from the unwrapped version.
-
-### Builder Pattern
-
-When `skip` is used, the generated struct includes `#[derive(::bon::Builder)]`, providing a fluent builder API:
-
-```rust
-let unwrapped = MyStructUw::builder()
-    .field_a(value1)
-    .field_b(value2)
-    .build();
-```
-
-This compensates for the missing `From` implementations and provides an ergonomic way to construct the partial structs.
-
-## Naming Strategy
-
-The `Opts::unwrapped_ident()` method determines the generated struct name:
-
-1. Apply prefix + (name or original) + suffix
-1. If result equals original name, append "Uw" suffix
-1. Default suffix is "Uw" when no naming options provided
-
-## Where Clause Handling
-
-All impls preserve the original where clause; no additional trait bounds are introduced for defaults.
